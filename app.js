@@ -5,7 +5,12 @@ const $ = (s) => document.querySelector(s);
 const app = $('#app'), pane = $('#editorPane'), list = $('#list'), editor = $('#editor'), search = $('#search');
 // Single-pane phone layout only on small touch screens (Galaxy folded). Mac windows always get list | note, like Apple Notes.
 const mobile = matchMedia('(max-width: 599px) and (pointer: coarse), (max-width: 419px)');
-const soloId = new URLSearchParams(location.search).get('note'); // set when a note is opened in its own window
+const soloId = new URLSearchParams(location.search).get('note');
+// List view (⋯ menu): 'list' | 'gallery' | 'attachments'. Gallery and attachments use the whole window,
+// opening a note on top of it (like the phone), so they share the single-pane navigation.
+let view = 'list', attTab = 'photos';
+try { view = localStorage.getItem('breeze.view') || 'list'; } catch {}
+const single = () => mobile.matches || (view !== 'list' && !soloId); // set when a note is opened in its own window
 
 /* ---------------- storage ---------------- */
 const idb = (() => {
@@ -139,21 +144,32 @@ function listed(all = visible()) {
 /* ---------------- list ---------------- */
 const PIN = '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" style="margin-right:4px;color:var(--accent)"><path d="M9 3h6l-1 6 3 3v2h-4v8h-2v-8H7v-2l3-3Z"/></svg>';
 function renderList() {
+  openRow = null;
   const q = search.value.trim();
   const all = visible();
   renderTags(all);
   const items = listed(all);
-  const row = (n) => {
+  const mode = trashMode ? 'list' : view;
+  list.className = mode === 'list' ? '' : mode;
+  const sel = (n) => (selected.has(n.id) ? ' sel' : '');
+  const card = (n) => {
+    const { title } = info(n);
+    const thumb = /<img data-img="([^"]+)"/.exec(n.body);
+    const cover = thumb ? `<img class="thumb" data-img="${thumb[1]}" alt="">` : `<div class="snip">${esc(textOf(n).trim().slice(0, 240))}</div>`;
+    return `<li data-id="${n.id}" class="card${n === current ? ' active' : ''}${sel(n)}"><div class="cv">${cover}</div><div class="t">${n.pinned ? PIN : ''}${esc(title)}</div><div class="d">${fmt(n.updatedAt)}</div></li>`;
+  };
+  const row = mode === 'gallery' ? card : (n) => {
     const { title, preview } = info(n);
     const when = trashMode ? `${Math.max(1, Math.ceil(TRASH_DAYS - (Date.now() - n.updatedAt) / 864e5))}일 남음` : fmt(n.updatedAt);
     const thumb = /<img data-img="([^"]+)"/.exec(n.body);
-    return `<li data-id="${n.id}" class="${n === current ? 'active' : ''}"><div class="sw"><div class="txt"><div class="t">${n.pinned && !trashMode ? PIN : ''}${esc(title)}</div><div class="p"><time>${when}</time>${esc(preview)}</div></div>${thumb ? `<img class="thumb" data-img="${thumb[1]}" alt="">` : ''}</div></li>`;
+    return `<li data-id="${n.id}" class="${n === current ? 'active' : ''}${sel(n)}"><div class="sw"><div class="txt"><div class="t">${n.pinned && !trashMode ? PIN : ''}${esc(title)}</div><div class="p"><time>${when}</time>${esc(preview)}</div></div>${thumb ? `<img class="thumb" data-img="${thumb[1]}" alt="">` : ''}</div></li>`;
   };
   const trashCount = notes.filter(inTrash).length;
   $('#trashCount').textContent = trashCount || '';
   $('#emptyTrashBtn').hidden = !trashMode || !trashCount;
   $('#composeBtn').hidden = trashMode;
   $('#noteCount').textContent = trashMode ? '' : `노트 ${all.length}개`;
+  if (mode === 'attachments') return renderAttachments(items);
   const pinned = trashMode ? [] : items.filter((n) => n.pinned), rest = items.filter((n) => trashMode || !n.pinned);
   let html = '';
   if (pinned.length) html += '<li class="sec">고정됨</li>' + pinned.map(row).join('');
@@ -164,10 +180,49 @@ function renderList() {
     html += row(n);
   }
   list.innerHTML = html || `<li class="none">${q ? '검색 결과 없음' : trashMode ? '휴지통이 비어 있습니다' : '노트가 없습니다'}</li>`;
+  loadThumbs();
+}
+function loadThumbs() {
   for (const img of list.querySelectorAll('img.thumb')) {
     const url = imgUrls.get(img.dataset.img);
     url ? (img.src = url) : thumbObserver.observe(img);
   }
+}
+
+/* ---------------- attachments view (사진 · 링크 · 문서 · 오디오) ---------------- */
+const ATT_TABS = [['photos', '사진'], ['links', '링크'], ['docs', '문서'], ['audio', '오디오']];
+const AUDIO_EXT = /\.(m4a|mp3|wav|aac|ogg|caf|amr|flac)$/i;
+const decodeHtml = (s) => { decoder.innerHTML = s; return decoder.value; };
+const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return u; } };
+function attachmentsOf(list) {
+  const out = { photos: [], links: [], docs: [], audio: [] };
+  for (const n of list) {
+    for (const m of n.body.matchAll(/<img data-img="([^"]+)"/g)) out.photos.push({ n, id: m[1] });
+    for (const m of n.body.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)) {
+      const attrs = m[1], label = decodeHtml(m[2].replace(/<[^>]*>/g, ''));
+      const file = /data-file="([^"]+)"/.exec(attrs);
+      if (file) {
+        const name = decodeHtml(/data-name="([^"]*)"/.exec(attrs)?.[1] || label);
+        (AUDIO_EXT.test(name) ? out.audio : out.docs).push({ n, id: file[1], name, size: label.split(' · ').pop() });
+        continue;
+      }
+      const href = /href="([^"]+)"/.exec(attrs);
+      if (href) out.links.push({ n, url: decodeHtml(href[1]), text: label });
+    }
+  }
+  return out;
+}
+function renderAttachments(items) {
+  const a = attachmentsOf(items), rows = a[attTab];
+  let html = `<li class="att-tabs">${ATT_TABS.map(([k, l]) => `<button data-att-tab="${k}" class="${k === attTab ? 'on' : ''}">${l}<span>${a[k].length}</span></button>`).join('')}</li>`;
+  const noteBtn = (n) => `<button class="att-note" data-open="${n.id}" title="${esc(info(n).title)}">노트 ›</button>`;
+  if (!rows.length) html += '<li class="none">없습니다</li>';
+  else if (attTab === 'photos') html += rows.map((p) => `<li class="att-photo" data-open="${p.n.id}"><img class="thumb" data-img="${p.id}" alt=""></li>`).join('');
+  else if (attTab === 'links') html += rows.map((l) => `<li class="att-row" data-url="${esc(l.url)}"><span class="ico">🔗</span><div class="txt"><div class="t">${esc(l.text || l.url)}</div><div class="p">${esc(hostOf(l.url))} · ${esc(info(l.n).title)}</div></div>${noteBtn(l.n)}</li>`).join('');
+  else html += rows.map((f) => `<li class="att-row" data-file="${f.id}" data-name="${esc(f.name)}"><span class="ico">${attTab === 'audio' ? '🎵' : '📄'}</span><div class="txt"><div class="t">${esc(f.name)}</div><div class="p">${esc(f.size)} · ${esc(info(f.n).title)}</div></div>${noteBtn(f.n)}</li>`).join('');
+  list.className = `attachments${attTab === 'photos' ? ' photos' : ''}`;
+  list.innerHTML = html;
+  loadThumbs();
 }
 // Apple Notes-style sections: 오늘, 어제, 지난 7일, 지난 30일, then month (this year) or year.
 function groupOf(ms) {
@@ -205,7 +260,7 @@ tagBar.addEventListener('click', (e) => {
 });
 let listRaf = 0;
 function renderListSoon() {
-  if (mobile.matches && app.classList.contains('show-editor')) return; // list is off-screen; showList() re-renders it
+  if (single() && app.classList.contains('show-editor')) return; // list is off-screen; showList() re-renders it
   if (!listRaf) listRaf = requestAnimationFrame(() => { listRaf = 0; renderList(); });
 }
 
@@ -216,55 +271,212 @@ list.addEventListener('dblclick', (e) => {
 });
 let swipedAt = 0;
 list.addEventListener('click', (e) => {
+  if (eatClick) { eatClick = false; return; } // the tap that ends a long press
   if (Date.now() - swipedAt < 400) return; // the click that ends a swipe
+  if (openRow) { closeRow(); return; } // a tap anywhere just closes an open swipe button
+  const tab = e.target.closest('[data-att-tab]');
+  if (tab) { attTab = tab.dataset.attTab; list.scrollTop = 0; renderList(); return; }
+  const toNote = e.target.closest('[data-open]');
+  if (toNote) { open(index.get(toNote.dataset.open)); return; }
+  const link = e.target.closest('li[data-url]');
+  if (link) { window.open(link.dataset.url, '_blank', 'noopener'); return; }
+  const file = e.target.closest('li[data-file]');
+  if (file) { openFile(file.dataset.file, file.dataset.name); return; }
   const li = e.target.closest('li[data-id]');
-  if (li) open(index.get(li.dataset.id));
+  if (!li) return;
+  if (selecting) toggleSel(li.dataset.id);
+  else open(index.get(li.dataset.id));
 });
 
-// Swipe a row: ← trash (in trash: delete forever), → pin (in trash: restore).
-let sw = null;
+// Swipe a row (phone): ← shows 삭제, → shows 고정 (in trash: 영구 삭제 / 복구). Nothing happens until the button is tapped.
+// Long-press a note: select several, then 이동 · 공유 · 삭제.
+const ACT_W = 96, REVEAL = 60;
+let sw = null, openRow = null, pressT = 0, eatClick = false;
+const swipeLabel = (left, n) => (left ? (trashMode ? '영구 삭제' : '삭제') : (trashMode ? '복구' : n?.pinned ? '고정 해제' : '고정'));
 list.addEventListener('pointerdown', (e) => {
-  if (e.pointerType === 'mouse') return;
+  if (e.pointerType === 'mouse' || e.target.closest('.swipe-act')) return;
+  eatClick = false; // a new gesture
   const li = e.target.closest('li[data-id]');
-  if (li) sw = { li, inner: li.firstElementChild, x: e.clientX, y: e.clientY, dx: 0, active: false, armed: false, id: e.pointerId };
+  if (!li) return;
+  if (!trashMode && !selecting) {
+    clearTimeout(pressT);
+    pressT = setTimeout(() => { if (sw?.active) return; sw = null; eatClick = true; enterSelect(li.dataset.id); }, 480);
+  }
+  const inner = li.querySelector('.sw');
+  if (inner && !selecting) sw = { li, inner, x: e.clientX, y: e.clientY, dx: 0, active: false, armed: false, id: e.pointerId };
 });
 list.addEventListener('pointermove', (e) => {
   if (!sw || e.pointerId !== sw.id) return;
   const dx = e.clientX - sw.x, dy = e.clientY - sw.y;
+  if (Math.abs(dx) > 8 || Math.abs(dy) > 8) clearTimeout(pressT);
   if (!sw.active) {
     if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { sw = null; return; }
     if (Math.abs(dx) < 12) return;
+    if (openRow && openRow !== sw.li) closeRow();
     sw.active = true;
     try { sw.li.setPointerCapture(e.pointerId); } catch {}
     sw.inner.style.transition = 'none';
   }
   sw.dx = dx;
-  sw.inner.style.transform = `translateX(${dx}px)`;
-  const n = index.get(sw.li.dataset.id);
+  const max = sw.li.offsetWidth * 0.45;
+  sw.inner.style.transform = `translateX(${Math.max(-max, Math.min(max, dx))}px)`;
   sw.li.dataset.swipe = dx < 0 ? 'left' : 'right';
-  sw.li.dataset.label = dx < 0 ? (trashMode ? '영구 삭제' : '삭제') : (trashMode ? '복구' : n?.pinned ? '고정 해제' : '고정');
-  const armed = Math.abs(dx) > sw.li.offsetWidth * 0.3;
+  sw.li.dataset.label = swipeLabel(dx < 0, index.get(sw.li.dataset.id));
+  const armed = Math.abs(dx) > REVEAL;
   if (armed !== sw.armed) { sw.armed = armed; sw.li.classList.toggle('armed', armed); if (armed) navigator.vibrate?.(8); }
 });
 function endSwipe() {
+  clearTimeout(pressT);
   if (!sw) return;
-  const { li, inner, active, armed, dx } = sw;
+  const { li, inner, active, dx } = sw;
   sw = null;
   if (!active) return;
   swipedAt = Date.now();
   inner.style.transition = '';
-  inner.style.transform = '';
   li.classList.remove('armed');
-  setTimeout(() => delete li.dataset.swipe, 250);
-  if (!armed) return;
-  const n = index.get(li.dataset.id);
-  if (!n) return;
-  if (dx < 0) trashMode ? purgeNote(n) : removeNote(n);
-  else if (trashMode) restoreNote(n);
-  else { n.pinned = !n.pinned; touch(n); syncPin(); renderList(); }
+  delete li.dataset.swipe;
+  if (Math.abs(dx) < REVEAL) { inner.style.transform = ''; return; }
+  closeRow();
+  const left = dx < 0, n = index.get(li.dataset.id);
+  const b = document.createElement('button');
+  b.className = `swipe-act ${left ? 'left' : 'right'}`;
+  b.textContent = swipeLabel(left, n);
+  b.onclick = (ev) => {
+    ev.stopPropagation();
+    closeRow();
+    if (!n) return;
+    if (left) trashMode ? purgeNote(n) : removeNote(n);
+    else if (trashMode) restoreNote(n);
+    else { n.pinned = !n.pinned; touch(n); syncPin(); renderList(); }
+  };
+  li.prepend(b);
+  inner.style.transform = `translateX(${left ? -ACT_W : ACT_W}px)`;
+  openRow = li;
+}
+function closeRow() {
+  if (!openRow) return;
+  const r = openRow;
+  openRow = null;
+  const inner = r.querySelector('.sw');
+  if (inner) inner.style.transform = '';
+  setTimeout(() => { if (openRow !== r) r.querySelector('.swipe-act')?.remove(); }, 260);
 }
 list.addEventListener('pointerup', endSwipe);
 list.addEventListener('pointercancel', endSwipe);
+list.addEventListener('contextmenu', (e) => {
+  const li = e.target.closest('li[data-id]');
+  if (!li || trashMode) return;
+  e.preventDefault(); // no browser menu on long press; right-click on a Mac also starts selecting
+  if (!touchUI && !selecting) enterSelect(li.dataset.id);
+});
+
+/* ---------------- multi-select: 이동 · 공유 · 삭제 ---------------- */
+let selecting = false;
+const selected = new Set();
+function enterSelect(id) {
+  closeRow();
+  selecting = true;
+  selected.clear();
+  if (id) selected.add(id);
+  app.classList.add('selecting');
+  $('#selBar').hidden = $('#selActions').hidden = false;
+  if (touchUI) history.pushState({ select: 1 }, '');
+  navigator.vibrate?.(15);
+  updateSel();
+  renderList();
+}
+function exitSelect(fromPop) {
+  if (!selecting) return;
+  selecting = false;
+  selected.clear();
+  app.classList.remove('selecting');
+  $('#selBar').hidden = $('#selActions').hidden = true;
+  renderList();
+  if (!fromPop && history.state?.select) history.back();
+}
+function toggleSel(id) {
+  selected.has(id) ? selected.delete(id) : selected.add(id);
+  list.querySelector(`li[data-id="${id}"]`)?.classList.toggle('sel', selected.has(id));
+  updateSel();
+}
+function updateSel() {
+  $('#selCount').textContent = selected.size ? `${selected.size}개 선택됨` : '노트 선택';
+  for (const b of document.querySelectorAll('#selActions button')) b.disabled = !selected.size;
+}
+$('#selDone').onclick = () => exitSelect();
+$('#selAll').onclick = () => {
+  const ids = listed().map((n) => n.id);
+  if (ids.every((id) => selected.has(id))) selected.clear(); else ids.forEach((id) => selected.add(id));
+  updateSel();
+  renderList();
+};
+$('#selActions').onclick = async (e) => {
+  const b = e.target.closest('[data-sel]');
+  if (!b || !selected.size) return;
+  const ns = [...selected].map((id) => index.get(id)).filter(Boolean);
+  if (b.dataset.sel === 'del') {
+    ns.forEach((n) => { n.deleted = true; touch(n); });
+    undoStack.push(...ns);
+    flush();
+    if (ns.includes(current)) { current = null; if (!single()) open(visible()[0]); }
+    exitSelect();
+    toast(`${ns.length}개를 휴지통으로 옮겼습니다`, '실행 취소', () => {
+      ns.forEach((n) => { undoStack.splice(undoStack.indexOf(n), 1); n.deleted = false; touch(n); });
+      flush();
+      renderList();
+    });
+  } else if (b.dataset.sel === 'share') {
+    const text = ns.map((n) => textOf(n).trim()).join('\n\n———\n\n');
+    try {
+      if (navigator.share) await navigator.share({ title: ns.length === 1 ? info(ns[0]).title : `노트 ${ns.length}개`, text });
+      else { await navigator.clipboard.writeText(text); toast('클립보드에 복사했습니다'); }
+    } catch {}
+  } else openTagSheet(ns);
+};
+// 이동: Breeze uses tags as folders, so moving = adding a tag line to each note.
+function openTagSheet(ns) {
+  const tags = [...new Set(notes.filter((n) => !n.deleted).flatMap(tagsOf))].sort((a, b) => a.localeCompare(b, 'ko'));
+  $('#tagChoices').innerHTML = tags.map((t) => `<button type="button" class="tag" data-pick="${esc(t)}">#${esc(t)}</button>`).join('') || '<p class="hint">아직 태그가 없습니다. 아래에 새로 입력하세요.</p>';
+  $('#newTag').value = '';
+  const d = $('#tagSheet');
+  d.returnValue = '';
+  d.onclose = () => {
+    if (d.returnValue !== 'ok') return;
+    const t = $('#newTag').value.trim().replace(/^#/, '').replace(/[^\p{L}\p{N}_\-/]+/gu, '_');
+    if (!/^[\p{L}_]/u.test(t)) { toast('태그는 글자로 시작해야 합니다'); return; }
+    let k = 0;
+    for (const n of ns) {
+      if (tagsOf(n).includes(t)) continue;
+      n.body += `<div>#${esc(t)}</div>`;
+      touch(n);
+      k++;
+    }
+    flush();
+    if (current && ns.includes(current)) setBody(current.body);
+    exitSelect();
+    toast(`${k}개 노트를 #${t}(으)로 옮겼습니다`);
+  };
+  d.showModal();
+}
+$('#tagChoices').onclick = (e) => { const b = e.target.closest('[data-pick]'); if (b) $('#newTag').value = b.dataset.pick; };
+$('#tagCancel').onclick = () => $('#tagSheet').close('cancel');
+
+/* ---------------- ⋯ view menu ---------------- */
+function markView() { for (const b of document.querySelectorAll('[data-view]')) b.classList.toggle('on', b.dataset.view === view); }
+function setView(v) {
+  if (trashMode) setTrash(false);
+  exitSelect();
+  view = v;
+  try { localStorage.setItem('breeze.view', v); } catch {}
+  applyLayout();
+  if (single()) showList();
+  else { app.classList.remove('show-editor'); app.classList.add('show-list'); open(current || visible()[0], { push: false }); }
+  list.scrollTop = 0;
+  renderList();
+}
+$('#viewBtn').onclick = (e) => { e.stopPropagation(); markView(); $('#viewMenu').hidden = !$('#viewMenu').hidden; };
+$('#viewMenu').onclick = (e) => { const b = e.target.closest('[data-view]'); if (!b) return; $('#viewMenu').hidden = true; setView(b.dataset.view); };
+document.addEventListener('click', (e) => { if (!e.target.closest('#viewMenu, #viewBtn')) $('#viewMenu').hidden = true; });
 search.addEventListener('input', renderListSoon);
 
 // Apple Notes-style keyboard: with the list focused, ↑/↓ move between notes, ⌫ trashes, Enter/→ edits.
@@ -298,7 +510,7 @@ function open(n, { focus = false, push = true } = {}) {
   setReading(readPref && !focus);
   syncPin();
   $('#noteDate').textContent = n ? new Date(n.updatedAt).toLocaleString('ko-KR', { dateStyle: 'long', timeStyle: 'short' }) : '';
-  if (n && mobile.matches && !app.classList.contains('show-editor')) {
+  if (n && single() && !app.classList.contains('show-editor')) {
     app.classList.replace('show-list', 'show-editor');
     if (push) history.pushState({ note: n.id }, '');
   }
@@ -370,7 +582,7 @@ function setTrash(on) {
   $('#sideTitle').textContent = on ? '휴지통' : '노트';
   $('#trashLabel').textContent = on ? '‹ 모든 노트' : '휴지통';
   $('#trashCount').hidden = on;
-  if (mobile.matches) showList();
+  if (single()) showList();
   else open(visible()[0]);
 }
 $('#trashBtn').onclick = () => setTrash(!trashMode);
@@ -398,12 +610,19 @@ if (window.visualViewport) {
 }
 $('#emptyNew').onclick = newNote;
 $('#backBtn').onclick = () => (history.state?.note ? history.back() : showList());
-addEventListener('popstate', () => { if (app.classList.contains('show-editor')) showList(); }); // Android back button
-app.classList.toggle('phone', mobile.matches);
-mobile.addEventListener('change', () => {
+addEventListener('popstate', () => { // Android back button
+  if (selecting) exitSelect(true);
+  else if (app.classList.contains('show-editor')) showList();
+});
+function applyLayout() {
   app.classList.toggle('phone', mobile.matches);
+  app.classList.toggle('single', single());
+}
+applyLayout();
+mobile.addEventListener('change', () => {
+  applyLayout();
   app.classList.remove('show-editor', 'show-list');
-  app.classList.add(mobile.matches && current ? 'show-editor' : 'show-list');
+  app.classList.add(single() && current ? 'show-editor' : 'show-list');
 });
 
 /* ---------------- editor ---------------- */
@@ -411,18 +630,50 @@ document.execCommand('defaultParagraphSeparator', false, 'div');
 
 editor.addEventListener('input', () => {
   if (!current) return;
+  for (const img of editor.querySelectorAll('img:not([data-img])')) if (img.src) adoptImage(img);
   const f = editor.firstChild;
   if (f && f.nodeType === 3 && getSelection().anchorNode === f) document.execCommand('formatBlock', false, '<div>');
   current.body = editor.innerHTML.replace(/<img\b[^>]*?data-img="([^"]+)"[^>]*>/g, '<img data-img="$1">');
   touch(current);
   highlightSoon();
 });
-editor.addEventListener('paste', (e) => {
+// Images can arrive as files, as clipboard items (Android keyboards), or as data: URLs inside pasted HTML.
+const clipFiles = (dt) => {
+  const files = [...(dt?.files || [])];
+  return files.length ? files : [...(dt?.items || [])].filter((i) => i.kind === 'file').map((i) => i.getAsFile()).filter(Boolean);
+};
+editor.addEventListener('paste', async (e) => {
   e.preventDefault();
-  const files = [...e.clipboardData.files];
+  const files = clipFiles(e.clipboardData);
   if (files.length) return insertFiles(files);
+  const html = e.clipboardData.getData('text/html');
+  const srcs = [...html.matchAll(/<img[^>]+src="(data:image\/[^"]+)"/g)].map((m) => m[1]);
+  if (srcs.length) {
+    const blobs = await Promise.all(srcs.map((u) => fetch(u).then((r) => r.blob()).catch(() => null)));
+    return insertFiles(blobs.filter(Boolean).map((b, i) => new File([b], `붙여넣은 이미지 ${i + 1}`, { type: b.type })));
+  }
   document.execCommand('insertText', false, e.clipboardData.getData('text/plain'));
 });
+editor.addEventListener('beforeinput', (e) => {
+  if (!/^insertFrom(Paste|Drop)|insertReplacementText/.test(e.inputType)) return;
+  const files = clipFiles(e.dataTransfer);
+  if (!files.length) return;
+  e.preventDefault();
+  insertFiles(files);
+});
+// Some keyboards insert an <img> directly — store it like any other photo.
+async function adoptImage(img) {
+  img.dataset.img = 'pending';
+  try {
+    const blob = await (await fetch(img.src)).blob();
+    const id = await storePhoto(new File([blob], 'image', { type: blob.type || 'image/png' }));
+    if (!id) throw new Error('unreadable');
+    img.dataset.img = id;
+    img.src = imgUrls.get(id);
+  } catch { img.remove(); }
+  changed();
+  sync.schedule(800);
+}
 editor.addEventListener('dragover', (e) => { if (e.dataTransfer.types.includes('Files')) e.preventDefault(); });
 editor.addEventListener('drop', (e) => {
   const files = [...e.dataTransfer.files];
@@ -605,7 +856,7 @@ addEventListener('keydown', (e) => {
   const mod = e.metaKey || e.ctrlKey;
   if (mod && !e.shiftKey && e.key.toLowerCase() === 'n') { e.preventDefault(); newNote(); }
   else if (mod && e.shiftKey && e.key.toLowerCase() === 'l' && current) { e.preventDefault(); cmds.check(); }
-  else if (mod && e.key.toLowerCase() === 'f' && !e.shiftKey) { e.preventDefault(); if (mobile.matches) showList(); search.focus(); }
+  else if (mod && e.key.toLowerCase() === 'f' && !e.shiftKey) { e.preventDefault(); if (single()) showList(); search.focus(); }
   else if (mod && e.altKey && e.code === 'KeyS') { e.preventDefault(); setFocusMode(!app.classList.contains('focus')); }
   else if (mod && !e.shiftKey && e.key.toLowerCase() === 'z' && undoStack.length && !isTyping()) { e.preventDefault(); undoDelete(); }
 });
@@ -627,7 +878,7 @@ function closeAndSelectNext(n) {
   const order = listed(), i = order.indexOf(n);
   const next = order[i + 1] || order[i - 1] || null;
   current = null;
-  if (mobile.matches) history.state?.note ? history.back() : showList();
+  if (single()) history.state?.note ? history.back() : showList();
   else open(next);
 }
 const undoStack = []; // notes trashed this session, newest last — ⌘Z brings them back
@@ -651,8 +902,8 @@ function undoDelete(n = undoStack.at(-1)) {
   n.deleted = false;
   touch(n);
   flush();
-  if (trashMode) renderList();
-  else { open(n); if (!mobile.matches) list.focus(); }
+  if (trashMode || single()) renderList(); // phone: the note just reappears in the list
+  else { open(n); list.focus(); }
   toast('노트를 복구했습니다');
 }
 function restoreNote(n) {
@@ -775,7 +1026,7 @@ const sync = (() => {
       unsaved.delete(n.id);
       changedNotes.push(n);
       if (n === current) {
-        if (n.deleted) mobile.matches ? showList() : open(visible()[0]);
+        if (n.deleted) single() ? showList() : open(visible()[0]);
         else { setBody(n.body); syncPin(); }
       }
     }
@@ -837,7 +1088,7 @@ const sync = (() => {
 })();
 
 /* ---------------- settings dialog ---------------- */
-const VERSION = 'v11';
+const VERSION = 'v12';
 $('#appVersion').textContent = `Breeze 노트 ${VERSION}`;
 $('#syncBtn').onclick = () => { $('#authMsg').textContent = ''; sync.ui(); $('#settings').showModal(); };
 $('#loginBtn').onclick = sync.login;
@@ -968,7 +1219,7 @@ $('#appleDir').onchange = (e) => { importAppleNotes(e.target.files).catch((err) 
     const n = index.get(soloId);
     open(n && !n.deleted ? n : null, { push: false });
     document.title = n ? info(n).title : 'Breeze 노트';
-  } else if (!mobile.matches) open(visible()[0], { push: false });
+  } else if (!single()) open(visible()[0], { push: false });
   else renderList();
   sync.init();
   requestAnimationFrame(() => app.classList.add('ready')); // enable transitions after first paint

@@ -16,9 +16,15 @@
 <body>
 <div id="app" class="show-list">
   <aside id="sidebar">
+    <div id="selBar" class="sel-bar" hidden>
+      <button id="selAll" class="link">전체 선택</button>
+      <b id="selCount">노트 선택</b>
+      <button id="selDone" class="link">완료</button>
+    </div>
     <header class="side-head">
       <h1 id="sideTitle">노트</h1>
       <button id="syncBtn" class="icon-btn sync-btn" title="동기화 설정"><span id="syncDot" class="dot off"></span>동기화</button>
+      <button id="viewBtn" class="icon-btn" title="보기 옵션"><svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
       <button id="newBtn" class="icon-btn" title="새 노트 (⌘N)">
         <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
       </button>
@@ -26,6 +32,17 @@
     <input id="search" type="search" placeholder="검색" autocomplete="off">
     <div id="tags" hidden></div>
     <ul id="list"></ul>
+    <div id="viewMenu" class="menu" hidden>
+      <button data-view="list">목록으로 보기</button>
+      <button data-view="gallery">갤러리로 보기</button>
+      <hr>
+      <button data-view="attachments">첨부 파일 보기</button>
+    </div>
+    <div id="selActions" class="sel-actions" hidden>
+      <button data-sel="move">이동</button>
+      <button data-sel="share">공유</button>
+      <button data-sel="del" class="danger">삭제</button>
+    </div>
     <footer class="side-foot">
       <button id="trashBtn" class="foot-btn">
         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
@@ -85,6 +102,16 @@
 </div>
 
 <div id="toast" hidden><span id="toastMsg"></span><button id="toastBtn" class="link"></button></div>
+
+<dialog id="tagSheet">
+  <form method="dialog" class="sheet">
+    <h2>태그로 옮기기</h2>
+    <p class="hint">선택한 노트에 태그를 붙여 한곳에 모읍니다. 태그는 폴더처럼 목록 위에서 골라 볼 수 있어요.</p>
+    <div id="tagChoices" class="tag-choices"></div>
+    <label>태그<input id="newTag" placeholder="예: 설교" autocomplete="off"></label>
+    <div class="row end"><button type="button" id="tagCancel">취소</button><button value="ok" class="primary">옮기기</button></div>
+  </form>
+</dialog>
 
 <dialog id="settings">
   <form method="dialog" class="sheet">
