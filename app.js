@@ -86,8 +86,8 @@ function fmt(ms) {
   if (d.toDateString() === y.toDateString()) return '어제';
   return d.getFullYear() === now.getFullYear() ? `${d.getMonth() + 1}. ${d.getDate()}.` : `${d.getFullYear()}. ${d.getMonth() + 1}. ${d.getDate()}.`;
 }
-// #태그: a hash at the start of a word, Korean included.
-const TAG_RE = /(?:^|[\s(])#([\p{L}\p{N}_][\p{L}\p{N}_\-/]*)/gu;
+// #태그: a hash at the start of a word, Korean included. Must start with a letter, so "#1" or "#3" in numbered notes aren't tags.
+const TAG_RE = /(?:^|[\s(])#([\p{L}_][\p{L}\p{N}_\-/]*)/gu;
 const tagCache = new Map();
 function tagsOf(n) {
   const t = textOf(n), c = tagCache.get(n.id);
@@ -121,17 +121,48 @@ function renderList() {
   const row = (n) => {
     const { title, preview } = info(n);
     const when = trashMode ? `${Math.max(1, Math.ceil(TRASH_DAYS - (Date.now() - n.updatedAt) / 864e5))}일 남음` : fmt(n.updatedAt);
-    return `<li data-id="${n.id}" class="${n === current ? 'active' : ''}"><div class="t">${n.pinned && !trashMode ? PIN : ''}${esc(title)}</div><div class="p"><time>${when}</time>${esc(preview)}</div></li>`;
+    const thumb = /<img data-img="([^"]+)"/.exec(n.body);
+    return `<li data-id="${n.id}" class="${n === current ? 'active' : ''}"><div class="sw"><div class="txt"><div class="t">${n.pinned && !trashMode ? PIN : ''}${esc(title)}</div><div class="p"><time>${when}</time>${esc(preview)}</div></div>${thumb ? `<img class="thumb" data-img="${thumb[1]}" alt="">` : ''}</div></li>`;
   };
   const trashCount = notes.filter(inTrash).length;
   $('#trashCount').textContent = trashCount || '';
   $('#emptyTrashBtn').hidden = !trashMode || !trashCount;
+  $('#composeBtn').hidden = trashMode;
+  $('#noteCount').textContent = trashMode ? '' : `노트 ${all.length}개`;
   const pinned = trashMode ? [] : items.filter((n) => n.pinned), rest = items.filter((n) => trashMode || !n.pinned);
   let html = '';
-  if (pinned.length) html += '<li class="sec">고정됨</li>' + pinned.map(row).join('') + (rest.length ? '<li class="sec">노트</li>' : '');
-  html += rest.map(row).join('');
+  if (pinned.length) html += '<li class="sec">고정됨</li>' + pinned.map(row).join('');
+  let group = '';
+  for (const n of rest) {
+    const g = trashMode ? '' : groupOf(n.updatedAt);
+    if (g !== group) { html += `<li class="sec">${g}</li>`; group = g; }
+    html += row(n);
+  }
   list.innerHTML = html || `<li class="none">${q ? '검색 결과 없음' : trashMode ? '휴지통이 비어 있습니다' : '노트가 없습니다'}</li>`;
+  for (const img of list.querySelectorAll('img.thumb')) {
+    const url = imgUrls.get(img.dataset.img);
+    url ? (img.src = url) : thumbObserver.observe(img);
+  }
 }
+// Apple Notes-style sections: 오늘, 어제, 지난 7일, 지난 30일, then month (this year) or year.
+function groupOf(ms) {
+  const now = new Date(), day = 864e5;
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  if (ms >= today) return '오늘';
+  if (ms >= today - day) return '어제';
+  if (ms >= today - 6 * day) return '지난 7일';
+  if (ms >= today - 29 * day) return '지난 30일';
+  const d = new Date(ms);
+  return d.getFullYear() === now.getFullYear() ? `${d.getMonth() + 1}월` : `${d.getFullYear()}년`;
+}
+// Thumbnails load only when scrolled into view, so a long list stays fast.
+const thumbObserver = new IntersectionObserver((entries) => {
+  for (const e of entries) {
+    if (!e.isIntersecting) continue;
+    thumbObserver.unobserve(e.target);
+    blobUrl(e.target.dataset.img).then((url) => { if (url) e.target.src = url; else e.target.remove(); });
+  }
+}, { root: list, rootMargin: '300px' });
 const tagBar = $('#tags');
 function renderTags(all) {
   const counts = new Map();
@@ -148,12 +179,62 @@ tagBar.addEventListener('click', (e) => {
   renderList();
 });
 let listRaf = 0;
-function renderListSoon() { if (!listRaf) listRaf = requestAnimationFrame(() => { listRaf = 0; renderList(); }); }
+function renderListSoon() {
+  if (mobile.matches && app.classList.contains('show-editor')) return; // list is off-screen; showList() re-renders it
+  if (!listRaf) listRaf = requestAnimationFrame(() => { listRaf = 0; renderList(); });
+}
 
+let swipedAt = 0;
 list.addEventListener('click', (e) => {
+  if (Date.now() - swipedAt < 400) return; // the click that ends a swipe
   const li = e.target.closest('li[data-id]');
   if (li) open(index.get(li.dataset.id));
 });
+
+// Swipe a row: ← trash (in trash: delete forever), → pin (in trash: restore).
+let sw = null;
+list.addEventListener('pointerdown', (e) => {
+  if (e.pointerType === 'mouse') return;
+  const li = e.target.closest('li[data-id]');
+  if (li) sw = { li, inner: li.firstElementChild, x: e.clientX, y: e.clientY, dx: 0, active: false, armed: false, id: e.pointerId };
+});
+list.addEventListener('pointermove', (e) => {
+  if (!sw || e.pointerId !== sw.id) return;
+  const dx = e.clientX - sw.x, dy = e.clientY - sw.y;
+  if (!sw.active) {
+    if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { sw = null; return; }
+    if (Math.abs(dx) < 12) return;
+    sw.active = true;
+    try { sw.li.setPointerCapture(e.pointerId); } catch {}
+    sw.inner.style.transition = 'none';
+  }
+  sw.dx = dx;
+  sw.inner.style.transform = `translateX(${dx}px)`;
+  const n = index.get(sw.li.dataset.id);
+  sw.li.dataset.swipe = dx < 0 ? 'left' : 'right';
+  sw.li.dataset.label = dx < 0 ? (trashMode ? '영구 삭제' : '삭제') : (trashMode ? '복구' : n?.pinned ? '고정 해제' : '고정');
+  const armed = Math.abs(dx) > sw.li.offsetWidth * 0.3;
+  if (armed !== sw.armed) { sw.armed = armed; sw.li.classList.toggle('armed', armed); if (armed) navigator.vibrate?.(8); }
+});
+function endSwipe() {
+  if (!sw) return;
+  const { li, inner, active, armed, dx } = sw;
+  sw = null;
+  if (!active) return;
+  swipedAt = Date.now();
+  inner.style.transition = '';
+  inner.style.transform = '';
+  li.classList.remove('armed');
+  setTimeout(() => delete li.dataset.swipe, 250);
+  if (!armed) return;
+  const n = index.get(li.dataset.id);
+  if (!n) return;
+  if (dx < 0) trashMode ? purgeNote(n) : removeNote(n);
+  else if (trashMode) restoreNote(n);
+  else { n.pinned = !n.pinned; touch(n); syncPin(); renderList(); }
+}
+list.addEventListener('pointerup', endSwipe);
+list.addEventListener('pointercancel', endSwipe);
 search.addEventListener('input', renderListSoon);
 
 // Apple Notes-style keyboard: with the list focused, ↑/↓ move between notes, ⌫ trashes, Enter/→ edits.
@@ -171,7 +252,7 @@ list.addEventListener('keydown', (e) => {
     trashMode ? purgeNote(current) : removeNote(current);
   } else if ((e.key === 'Enter' || e.key === 'ArrowRight') && current && !current.deleted) {
     e.preventDefault();
-    editor.focus(); caretEnd();
+    setReading(false); editor.focus(); caretEnd();
   }
 });
 function scrollActive() { list.querySelector('li.active')?.scrollIntoView({ block: 'nearest' }); }
@@ -182,22 +263,41 @@ function open(n, { focus = false, push = true } = {}) {
   if (current && current !== n) leave(current);
   current = n || null;
   setBody(n ? n.body : '');
-  editor.contentEditable = n && !n.deleted ? 'true' : 'false';
   pane.classList.toggle('none', !n);
   pane.classList.toggle('trashed', !!n?.deleted);
-  $('#pinBtn').classList.toggle('on', !!n?.pinned);
-  if (n && mobile.matches && app.className !== 'show-editor') {
-    app.className = 'show-editor';
+  setReading(touchUI && !focus);
+  syncPin();
+  if (n && mobile.matches && !app.classList.contains('show-editor')) {
+    app.classList.replace('show-list', 'show-editor');
     if (push) history.pushState({ note: n.id }, '');
   }
   renderList();
   scrollActive();
   if (n && focus) { editor.focus(); caretEnd(); }
 }
+// Reading mode: the note can't be edited, so tapping it never brings up the keyboard.
+// Touch devices open notes this way; 편집 switches to editing, 완료 goes back.
+const touchUI = matchMedia('(pointer: coarse)').matches;
+document.documentElement.classList.toggle('touch', touchUI);
+let reading = false;
+function setReading(on) {
+  const editable = !!current && !current.deleted;
+  reading = on && editable;
+  editor.contentEditable = editable && !reading ? 'true' : 'false';
+  pane.classList.toggle('reading', reading);
+  $('#modeBtn').textContent = reading ? '편집' : '완료';
+  if (reading && document.activeElement === editor) editor.blur();
+}
+$('#modeBtn').onclick = () => {
+  if (reading) { setReading(false); editor.focus(); caretEnd(); }
+  else setReading(true);
+};
+function syncPin() { for (const b of document.querySelectorAll('[data-cmd=pin]')) b.classList.toggle('on', !!current?.pinned); }
+
 function showList() {
   if (current) leave(current);
   current = null;
-  app.className = 'show-list';
+  app.classList.replace('show-editor', 'show-list');
   pane.classList.add('none');
   renderList();
 }
@@ -246,10 +346,24 @@ $('#restoreBtn').onclick = () => current && restoreNote(current);
 $('#purgeBtn').onclick = () => current && purgeNote(current);
 
 $('#newBtn').onclick = newNote;
+$('#composeBtn').onclick = newNote;
+// Wide screens (Mac, unfolded Fold): hide the list to write full-screen, like iPad.
+const setFocusMode = (on) => { app.classList.toggle('focus', on); try { localStorage.setItem('breeze.focus', on ? '1' : ''); } catch {} };
+$('#focusBtn').onclick = () => setFocusMode(!app.classList.contains('focus'));
+try { if (localStorage.getItem('breeze.focus')) app.classList.add('focus'); } catch {}
+// Keep the bottom bar just above the on-screen keyboard on browsers that don't resize the page for it.
+if (window.visualViewport) {
+  const fit = () => document.documentElement.style.setProperty('--vvh', `${visualViewport.height}px`);
+  visualViewport.addEventListener('resize', fit);
+  fit();
+}
 $('#emptyNew').onclick = newNote;
 $('#backBtn').onclick = () => (history.state?.note ? history.back() : showList());
-addEventListener('popstate', () => { if (app.className === 'show-editor') showList(); }); // Android back button
-mobile.addEventListener('change', () => { app.className = mobile.matches && current ? 'show-editor' : 'show-list'; });
+addEventListener('popstate', () => { if (app.classList.contains('show-editor')) showList(); }); // Android back button
+mobile.addEventListener('change', () => {
+  app.classList.remove('show-editor', 'show-list');
+  app.classList.add(mobile.matches && current ? 'show-editor' : 'show-list');
+});
 
 /* ---------------- editor ---------------- */
 document.execCommand('defaultParagraphSeparator', false, 'div');
@@ -264,18 +378,25 @@ editor.addEventListener('input', () => {
 });
 editor.addEventListener('paste', (e) => {
   e.preventDefault();
-  const files = [...e.clipboardData.files].filter((f) => f.type.startsWith('image/'));
-  if (files.length) return insertImages(files);
+  const files = [...e.clipboardData.files];
+  if (files.length) return insertFiles(files);
   document.execCommand('insertText', false, e.clipboardData.getData('text/plain'));
 });
 editor.addEventListener('dragover', (e) => { if (e.dataTransfer.types.includes('Files')) e.preventDefault(); });
 editor.addEventListener('drop', (e) => {
-  const files = [...e.dataTransfer.files].filter((f) => f.type.startsWith('image/'));
+  const files = [...e.dataTransfer.files];
   if (!files.length || !current) return;
   e.preventDefault();
   const r = document.caretRangeFromPoint?.(e.clientX, e.clientY);
   if (r) { const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
-  insertImages(files);
+  insertFiles(files);
+});
+// Attached files open on click; links open in a new tab.
+editor.addEventListener('click', (e) => {
+  const chip = e.target.closest('a.file');
+  if (chip) { e.preventDefault(); openFile(chip.dataset.file, chip.dataset.name); return; }
+  const link = e.target.closest('a[href]');
+  if (link) { e.preventDefault(); window.open(link.href, '_blank', 'noopener'); }
 });
 
 function setBody(html) {
@@ -304,19 +425,23 @@ function highlightSoon() { if (!hlRaf) hlRaf = requestAnimationFrame(() => { hlR
 
 /* ---------------- images ---------------- */
 const imgUrls = new Map(); // image id -> object URL
+async function blobUrl(id) {
+  let url = imgUrls.get(id);
+  if (url) return url;
+  let rec = await idb.img(id);
+  if (!rec) {
+    const blob = await sync.download(id);
+    if (blob) { rec = { id, blob, uploaded: true }; await idb.putImg(rec); }
+  }
+  if (!rec) return null;
+  url = URL.createObjectURL(rec.blob);
+  imgUrls.set(id, url);
+  return url;
+}
 async function hydrate() {
   for (const img of editor.querySelectorAll('img[data-img]')) {
-    const id = img.dataset.img;
     if (img.getAttribute('src')) continue;
-    let url = imgUrls.get(id);
-    if (!url) {
-      let rec = await idb.img(id);
-      if (!rec) {
-        const blob = await sync.download(id);
-        if (blob) { rec = { id, blob, uploaded: true }; await idb.putImg(rec); }
-      }
-      if (rec) { url = URL.createObjectURL(rec.blob); imgUrls.set(id, url); }
-    }
+    const url = await blobUrl(img.dataset.img);
     if (url) { img.src = url; img.classList.remove('missing'); } else img.classList.add('missing');
   }
 }
@@ -336,22 +461,57 @@ async function compress(file) {
   }
   return blob;
 }
-async function insertImages(files) {
+/* ---------------- files (photos are compressed, everything else is kept as-is) ---------------- */
+const MAX_FILE = 50 * 1024 * 1024; // Supabase free-plan upload limit
+const isPhoto = (f) => /^image\/(png|jpe?g|gif|webp|heic|heif|bmp|tiff)$/i.test(f.type) || /\.(heic|heif)$/i.test(f.name || '');
+const fmtSize = (b) => (b < 1048576 ? `${Math.max(1, Math.round(b / 1024))}KB` : `${(b / 1048576).toFixed(1)}MB`);
+const fileChip = (id, name, size) => `<a class="file" data-file="${id}" data-name="${esc(name)}" contenteditable="false">${esc(name)} · ${fmtSize(size)}</a>`;
+async function storeBlob(blob) {
+  const id = crypto.randomUUID();
+  await idb.putImg({ id, blob, uploaded: false });
+  return id;
+}
+async function storePhoto(file) {
+  const blob = await compress(file).catch(() => null);
+  if (!blob) return null;
+  const id = await storeBlob(blob);
+  imgUrls.set(id, URL.createObjectURL(blob));
+  return id;
+}
+async function insertFiles(files) {
   if (!current) return;
   if (!editor.contains(getSelection().anchorNode)) { editor.focus(); caretEnd(); }
   for (const f of files) {
-    const blob = await compress(f).catch(() => null);
-    if (!blob) { toast('사진을 읽을 수 없습니다'); continue; }
-    const id = crypto.randomUUID();
-    await idb.putImg({ id, blob, uploaded: false });
-    imgUrls.set(id, URL.createObjectURL(blob));
-    document.execCommand('insertHTML', false, `<img data-img="${id}">`);
+    const photoId = isPhoto(f) ? await storePhoto(f) : null; // undecodable photos (e.g. HEIC in Chrome) become plain files
+    if (photoId) {
+      document.execCommand('insertHTML', false, `<img data-img="${photoId}">`);
+    } else if (f.size > MAX_FILE) {
+      toast(`${f.name}: 50MB가 넘는 파일은 넣을 수 없습니다`);
+    } else {
+      document.execCommand('insertHTML', false, fileChip(await storeBlob(f), f.name, f.size) + '&nbsp;');
+    }
   }
   hydrate();
   sync.schedule(800);
 }
-const photoInput = $('#photoInput');
-photoInput.onchange = () => { insertImages([...photoInput.files]); photoInput.value = ''; };
+async function openFile(id, name) {
+  let blob = (await idb.img(id))?.blob;
+  if (!blob) {
+    toast('파일을 받는 중…');
+    blob = await sync.download(id);
+    if (blob) await idb.putImg({ id, blob, uploaded: true });
+  }
+  if (!blob) return toast('파일을 열 수 없습니다. 동기화 상태를 확인하세요.');
+  const url = URL.createObjectURL(new File([blob], name, { type: blob.type }));
+  const viewable = /^(application\/pdf|image\/|text\/|audio\/|video\/)/.test(blob.type);
+  if (!viewable || !window.open(url, '_blank')) {
+    const a = document.createElement('a'); a.href = url; a.download = name; a.click();
+  }
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+const photoInput = $('#photoInput'), fileInput = $('#fileInput');
+photoInput.onchange = () => { insertFiles([...photoInput.files]); photoInput.value = ''; };
+fileInput.onchange = () => { insertFiles([...fileInput.files]); fileInput.value = ''; };
 // Tap the circle to tick a checklist item.
 editor.addEventListener('pointerdown', (e) => {
   const li = e.target.closest?.('ul.checklist > li');
@@ -384,16 +544,18 @@ const cmds = {
     ulAt()?.classList.add('checklist');
     changed();
   },
-  pin: () => { current.pinned = !current.pinned; $('#pinBtn').classList.toggle('on', current.pinned); touch(current); renderList(); },
+  pin: () => { current.pinned = !current.pinned; syncPin(); touch(current); renderList(); },
   del: () => removeNote(current),
+  new: () => newNote(),
   photo: () => photoInput.click(),
+  file: () => fileInput.click(),
 };
 for (const b of document.querySelectorAll('[data-cmd]')) {
   b.addEventListener('pointerdown', (e) => e.preventDefault()); // keep the caret in the editor
   b.addEventListener('click', () => {
     if (!current) return;
     const c = b.dataset.cmd;
-    if (!['pin', 'del', 'photo'].includes(c) && !editor.contains(getSelection().anchorNode)) { editor.focus(); caretEnd(); }
+    if (!['pin', 'del', 'photo', 'file', 'new'].includes(c) && !editor.contains(getSelection().anchorNode)) { editor.focus(); caretEnd(); }
     cmds[c]();
   });
 }
@@ -513,7 +675,7 @@ const sync = (() => {
 
   async function pushImages() {
     for (const r of (await idb.allImgs()).filter((r) => !r.uploaded)) {
-      const { error } = await sb.storage.from('images').upload(`${user.id}/${r.id}`, r.blob, { contentType: r.blob.type, upsert: true });
+      const { error } = await sb.storage.from('images').upload(`${user.id}/${r.id}`, r.blob, { contentType: r.blob.type || 'application/octet-stream', upsert: true });
       if (error) throw error;
       r.uploaded = true;
       await idb.putImg(r);
@@ -552,7 +714,7 @@ const sync = (() => {
       changedNotes.push(n);
       if (n === current) {
         if (n.deleted) mobile.matches ? showList() : open(visible()[0]);
-        else { setBody(n.body); $('#pinBtn').classList.toggle('on', n.pinned); }
+        else { setBody(n.body); syncPin(); }
       }
     }
     if (changedNotes.length) { idb.putMany(changedNotes); renderList(); }
@@ -646,6 +808,91 @@ $('#importFile').onchange = async (e) => {
   e.target.value = '';
 };
 
+/* ---------------- Apple Notes import ---------------- */
+// Reads the folder written by tools/export-apple-notes.js. Re-importing updates the same notes instead of duplicating.
+const KEEP = { DIV: 'div', P: 'div', H1: 'div', H2: 'h2', H3: 'h2', H4: 'h2', B: 'b', STRONG: 'b', I: 'i', EM: 'i', U: 'u', S: 's', STRIKE: 's',
+  UL: 'ul', OL: 'ol', LI: 'li', TABLE: 'table', THEAD: 'thead', TBODY: 'tbody', TR: 'tr', TD: 'td', TH: 'th', BR: 'br', A: 'a', IMG: 'img' };
+function sanitize(root, imgIds) {
+  const out = document.createElement('div');
+  const walk = (src, dst) => {
+    for (const c of src.childNodes) {
+      if (c.nodeType === 3) { dst.append(c.data); continue; }
+      if (c.nodeType !== 1 || /^(SCRIPT|STYLE|OBJECT|IFRAME|HEAD)$/.test(c.tagName)) continue;
+      const tag = KEEP[c.tagName];
+      if (!tag) { walk(c, dst); continue; }
+      if (tag === 'img') {
+        const id = imgIds.get(c.getAttribute('src'));
+        if (id) { const img = document.createElement('img'); img.dataset.img = id; dst.append(img); }
+        continue;
+      }
+      const el = document.createElement(tag);
+      if (tag === 'a') {
+        const href = c.getAttribute('href') || '';
+        if (!/^(https?:|mailto:|tel:)/i.test(href)) { walk(c, dst); continue; }
+        el.setAttribute('href', href);
+      }
+      walk(c, el);
+      dst.append(el);
+    }
+  };
+  walk(root, out);
+  return out.innerHTML;
+}
+async function uuidFrom(text) {
+  const h = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20, 32)}`;
+}
+async function importAppleNotes(fileList) {
+  const msg = $('#authMsg');
+  const files = new Map([...fileList].map((f) => [f.webkitRelativePath.split('/').slice(1).join('/'), f]));
+  const meta = files.get('notes.json');
+  if (!meta) { msg.textContent = 'notes.json이 들어 있는 내보내기 폴더(apple-notes-export)를 고르세요.'; return; }
+  const { notes: incoming } = JSON.parse(await meta.text());
+  let photos = 0, others = 0, est = 0;
+  for (const [p, f] of files) {
+    if (!p.startsWith('files/')) continue;
+    if (isPhoto(f)) { photos++; est += Math.min(f.size, 250 * 1024); } else { others++; est += f.size; }
+  }
+  if (!confirm(`애플 노트 ${incoming.length}개를 가져올까요?\n\n사진 ${photos}개(압축), 파일 ${others}개\n업로드 예상 용량: 약 ${fmtSize(est)} (무료 한도 1GB)\n\n폴더 이름은 #태그로 바뀝니다.`)) return;
+
+  let done = 0, skipped = 0, batch = [];
+  for (const r of incoming) {
+    msg.textContent = `가져오는 중… ${done + skipped}/${incoming.length}`;
+    const id = await uuidFrom('apple:' + r.id);
+    const existing = index.get(id);
+    if (existing && existing.updatedAt >= r.modified) { skipped++; continue; }
+
+    const doc = new DOMParser().parseFromString(r.body, 'text/html');
+    const imgIds = new Map();
+    for (const img of doc.querySelectorAll('img')) {
+      const src = img.getAttribute('src'), f = files.get(src);
+      if (f && !imgIds.has(src)) { const pid = await storePhoto(f); if (pid) imgIds.set(src, pid); }
+    }
+    let body = sanitize(doc.body, imgIds);
+    for (const a of r.attachments) {
+      if (a.kind === 'link') { body += `<div><a href="${esc(a.url)}">${esc(a.name || a.url)}</a></div>`; continue; }
+      const f = files.get(a.path);
+      if (!f) continue;
+      const pid = a.kind === 'image' && isPhoto(f) ? await storePhoto(f) : null;
+      if (pid) body += `<img data-img="${pid}">`;
+      else if (f.size <= MAX_FILE) body += `<div>${fileChip(await storeBlob(f), a.name, f.size)}</div>`;
+    }
+    if (r.folder && !['Notes', '메모'].includes(r.folder)) body += `<div>#${esc(r.folder.trim().replace(/[^\p{L}\p{N}_\-/]+/gu, '_'))}</div>`;
+
+    const n = { id, body, pinned: false, deleted: false, updatedAt: r.modified, dirty: true };
+    existing ? Object.assign(existing, n) : addNote(n);
+    batch.push(existing || n);
+    if (batch.length >= 25) { await idb.putMany(batch); batch = []; renderListSoon(); }
+    done++;
+  }
+  await idb.putMany(batch);
+  renderList();
+  flush();
+  msg.textContent = `${done}개를 가져왔습니다${skipped ? ` (이미 최신인 ${skipped}개는 건너뜀)` : ''}. 동기화가 끝날 때까지 앱을 열어 두세요.`;
+}
+$('#appleBtn').onclick = () => $('#appleDir').click();
+$('#appleDir').onchange = (e) => { importAppleNotes(e.target.files).catch((err) => ($('#authMsg').textContent = '가져오기 실패: ' + err.message)); e.target.value = ''; };
+
 /* ---------------- boot ---------------- */
 (async () => {
   (await idb.all()).forEach(addNote);
@@ -655,6 +902,7 @@ $('#importFile').onchange = async (e) => {
   if (!mobile.matches) open(visible()[0], { push: false });
   else renderList();
   sync.init();
+  requestAnimationFrame(() => app.classList.add('ready')); // enable transitions after first paint
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 })();
 addEventListener('pagehide', flush);
