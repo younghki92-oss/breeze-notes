@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#f3f1ec" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1c1c1e" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+<title>Breeze 노트</title>
+</head>
+<body>
+<div id="app" class="show-list">
+  <aside id="sidebar">
+    <header class="side-head">
+      <h1>노트</h1>
+      <button id="syncBtn" class="icon-btn sync-btn" title="동기화 설정"><span id="syncDot" class="dot off"></span>동기화</button>
+      <button id="newBtn" class="icon-btn" title="새 노트 (⌘N)">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+      </button>
+    </header>
+    <input id="search" type="search" placeholder="검색" autocomplete="off">
+    <div id="tags" hidden></div>
+    <ul id="list"></ul>
+  </aside>
+
+  <main id="editorPane" class="none">
+    <header class="ed-head">
+      <button id="backBtn" class="icon-btn back">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>노트
+      </button>
+      <div class="tools">
+        <button class="icon-btn" data-cmd="check" title="체크리스트 (⌘⇧L)"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg></button>
+        <button class="icon-btn" data-cmd="list" title="글머리 목록"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1" fill="currentColor"/><circle cx="4.5" cy="12" r="1" fill="currentColor"/><circle cx="4.5" cy="18" r="1" fill="currentColor"/></svg></button>
+        <button class="icon-btn" data-cmd="photo" title="사진 넣기"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="15" rx="3"/><circle cx="9" cy="11" r="2"/><path d="m21 17-5-5-9 8"/></svg></button>
+        <button class="icon-btn" data-cmd="heading" title="제목"><b class="txt">Aa</b></button>
+        <button class="icon-btn" data-cmd="bold" title="굵게 (⌘B)"><b class="txt">B</b></button>
+        <button class="icon-btn" data-cmd="pin" id="pinBtn" title="고정"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3Z"/></svg></button>
+        <button class="icon-btn" data-cmd="del" title="삭제"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
+      </div>
+    </header>
+    <input type="file" id="photoInput" accept="image/*" multiple hidden>
+    <div id="editor" contenteditable="false" spellcheck="false"></div>
+    <div id="empty">노트를 선택하거나 <button id="emptyNew" class="link">새 노트</button>를 만드세요</div>
+  </main>
+</div>
+
+<div id="toast" hidden><span id="toastMsg"></span><button id="toastBtn" class="link"></button></div>
+
+<dialog id="settings">
+  <form method="dialog" class="sheet">
+    <h2>동기화</h2>
+    <p class="hint">무료 Supabase 프로젝트 하나로 맥북과 갤럭시가 같은 노트를 공유합니다. 설정 방법은 README.md를 참고하세요.</p>
+    <div id="cfgBox">
+      <label>Project URL<input id="sbUrl" placeholder="https://xxxx.supabase.co" autocomplete="off"></label>
+      <label>Publishable (anon) key<input id="sbKey" placeholder="sb_publishable_… 또는 eyJ…" autocomplete="off"></label>
+    </div>
+    <div id="authBox">
+      <label>이메일<input id="email" type="email" autocomplete="username"></label>
+      <label>비밀번호<input id="pw" type="password" autocomplete="current-password"></label>
+      <div class="row"><button type="button" id="loginBtn" class="primary">로그인</button><button type="button" id="signupBtn">처음이면 가입</button></div>
+    </div>
+    <div id="userBox" hidden>
+      <p>로그인됨: <b id="userEmail"></b></p>
+      <p id="lastSync" class="hint"></p>
+      <div class="row"><button type="button" id="syncNow" class="primary">지금 동기화</button><button type="button" id="logoutBtn">로그아웃</button></div>
+    </div>
+    <p id="authMsg" class="msg"></p>
+    <hr>
+    <div class="row"><button type="button" id="exportBtn">백업 내보내기</button><button type="button" id="importBtn">백업 가져오기</button><input type="file" id="importFile" accept=".json,application/json" hidden></div>
+    <div class="row end"><button value="close">닫기</button></div>
+  </form>
+</dialog>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
