@@ -1,5 +1,5 @@
 // Offline shell: serve from cache instantly, refresh in the background (new versions apply on next launch).
-const CACHE = 'breeze-v9';
+const CACHE = 'breeze-v10';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -15,7 +15,7 @@ self.addEventListener('fetch', (e) => {
   if (u.origin !== location.origin && u.hostname !== 'cdn.jsdelivr.net') return; // Supabase API goes straight to network
   e.respondWith(caches.open(CACHE).then(async (c) => {
     const hit = await c.match(e.request, { ignoreSearch: u.origin === location.origin });
-    const net = fetch(e.request).then((r) => { if (r.ok) c.put(e.request, r.clone()); return r; }).catch(() => hit);
+    const net = fetch(e.request, u.origin === location.origin ? { cache: 'no-cache' } : {}).then((r) => { if (r.ok) c.put(e.request, r.clone()); return r; }).catch(() => hit);
     return hit || net;
   }));
 });

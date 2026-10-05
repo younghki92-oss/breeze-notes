@@ -220,3 +220,5 @@ html.touch #editorPane.editing .mode-btn { display: inline-flex; }
 #editorPane.none .read-btn, #editorPane.trashed .read-btn { display: none; }
 #noteDate { text-align: center; font-size: 13px; color: var(--mute); padding: 0 0 4px; min-height: 1em; }
 #editorPane.none #noteDate { visibility: hidden; }
+
+.version { margin-right: auto; align-self: center; }

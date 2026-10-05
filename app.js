@@ -600,7 +600,10 @@ function closeAndSelectNext(n) {
 }
 const undoStack = []; // notes trashed this session, newest last — ⌘Z brings them back
 function removeNote(n) {
+  // leave the editor, otherwise ⌘Z would be taken as "undo typing" in the next note
+  if (document.activeElement === editor) editor.blur();
   closeAndSelectNext(n);
+  if (!mobile.matches) list.focus();
   n.deleted = true;
   touch(n);
   flush();
@@ -801,6 +804,8 @@ const sync = (() => {
 })();
 
 /* ---------------- settings dialog ---------------- */
+const VERSION = 'v10';
+$('#appVersion').textContent = `Breeze 노트 ${VERSION}`;
 $('#syncBtn').onclick = () => { $('#authMsg').textContent = ''; sync.ui(); $('#settings').showModal(); };
 $('#loginBtn').onclick = sync.login;
 $('#signupBtn').onclick = sync.signup;
@@ -929,6 +934,15 @@ $('#appleDir').onchange = (e) => { importAppleNotes(e.target.files).catch((err) 
   else renderList();
   sync.init();
   requestAnimationFrame(() => app.classList.add('ready')); // enable transitions after first paint
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  if ('serviceWorker' in navigator) {
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.register('sw.js').then((reg) => {
+      // look for a new version whenever the app comes back to the foreground
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+    }).catch(() => {});
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (hadController) toast('새 버전이 준비됐습니다', '새로고침', () => { flush(); location.reload(); });
+    });
+  }
 })();
 addEventListener('pagehide', flush);
