@@ -15,12 +15,10 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); o
   -webkit-font-smoothing: antialiased; }
 button { font: inherit; color: inherit; }
 
-#app { display: grid; grid-template-columns: clamp(250px, 32vw, 340px) minmax(0, 1fr); height: var(--vvh, 100dvh); }
+#app { display: grid; grid-template-columns: clamp(200px, 34vw, 340px) minmax(0, 1fr); height: var(--vvh, 100dvh); }
 /* full-screen note (◫ / ⌥⌘S): a single column, so the note doesn't fall into the hidden list's slot */
-@media (min-width: 600px) {
-  #app.focus { grid-template-columns: minmax(0, 1fr); }
-  #app.focus #sidebar { display: none; }
-}
+#app.focus:not(.phone) { grid-template-columns: minmax(0, 1fr); }
+#app.focus:not(.phone) #sidebar { display: none; }
 
 /* ---------- sidebar ---------- */
 #sidebar { min-width: 0; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0;
@@ -112,7 +110,7 @@ dialog::backdrop { background: #0006; }
 .msg { margin: 0; font-size: 13px; min-height: 1em; color: var(--accent); }
 
 /* ---------- phone ---------- */
-@media (max-width: 599px) {
+@media (max-width: 599px) and (pointer: coarse), (max-width: 419px) {
   #app { grid-template-columns: minmax(0, 1fr); }
   #app.show-list #editorPane { display: none; }
   #app.show-editor #sidebar { display: none; }
@@ -160,7 +158,7 @@ dialog::backdrop { background: #0006; }
 .pill { border: 1px solid var(--line); background: var(--side); border-radius: 16px; padding: 5px 14px; cursor: pointer; font-size: 14px; }
 .pill.danger { color: #ff453a; }
 #editorPane.trashed #editor { opacity: .75; }
-@media (max-width: 599px) { .trash-tools .hint { display: none; } }
+@media (max-width: 599px) and (pointer: coarse), (max-width: 419px) { .trash-tools .hint { display: none; } }
 
 [hidden] { display: none !important; }
 
@@ -188,7 +186,7 @@ html.touch #editorPane.editing .mode-btn { display: inline-flex; }
 /* ---------- bottom bar (phone) ---------- */
 .ed-bar { display: none; }
 .wide-only { display: inline-flex; }
-@media (max-width: 599px) {
+@media (max-width: 599px) and (pointer: coarse), (max-width: 419px) {
   .wide-only, #newBtn { display: none; }
   .ed-head .tools { display: none; }
   .ed-head .read-btn { margin-left: auto; }
@@ -204,7 +202,7 @@ html.touch #editorPane.editing .mode-btn { display: inline-flex; }
 }
 
 /* ---------- transitions (phone) ---------- */
-@media (max-width: 599px) {
+@media (max-width: 599px) and (pointer: coarse), (max-width: 419px) {
   #app.ready.show-editor #editorPane { animation: slideIn .28s cubic-bezier(.2,.8,.2,1); }
   #app.ready.show-list #sidebar { animation: slideBack .28s cubic-bezier(.2,.8,.2,1); }
 }
@@ -222,3 +220,8 @@ html.touch #editorPane.editing .mode-btn { display: inline-flex; }
 #editorPane.none #noteDate { visibility: hidden; }
 
 .version { margin-right: auto; align-self: center; }
+
+/* ---------- a note in its own window (double-click in the list) ---------- */
+#app.solo { grid-template-columns: minmax(0, 1fr); }
+#app.solo #sidebar, #app.solo .wide-only, #app.solo .back { display: none !important; }
+#app.solo #editorPane { display: flex !important; }

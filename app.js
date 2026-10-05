@@ -3,7 +3,9 @@
 
 const $ = (s) => document.querySelector(s);
 const app = $('#app'), pane = $('#editorPane'), list = $('#list'), editor = $('#editor'), search = $('#search');
-const mobile = matchMedia('(max-width: 599px)'); // single-pane phone layout (Fold cover screen); wider gets list | note
+// Single-pane phone layout only on small touch screens (Galaxy folded). Mac windows always get list | note, like Apple Notes.
+const mobile = matchMedia('(max-width: 599px) and (pointer: coarse), (max-width: 419px)');
+const soloId = new URLSearchParams(location.search).get('note'); // set when a note is opened in its own window
 
 /* ---------------- storage ---------------- */
 const idb = (() => {
@@ -57,9 +59,32 @@ function touch(n) {
   saveT = setTimeout(flush, 300);
   renderListSoon();
 }
+// Other Breeze windows (a note opened by double-click) hear about every save, so both stay in step.
+const bc = 'BroadcastChannel' in window ? new BroadcastChannel('breeze-notes') : null;
+async function persist(list) {
+  if (!list.length) return;
+  await idb.putMany(list);
+  bc?.postMessage(list.map(({ id, body, pinned, deleted, updatedAt, dirty }) => ({ id, body, pinned, deleted, updatedAt, dirty })));
+}
+bc?.addEventListener('message', ({ data }) => {
+  let changed = false;
+  for (const r of data) {
+    let n = index.get(r.id);
+    if (n && n.updatedAt >= r.updatedAt) continue;
+    if (!n) { n = { id: r.id }; addNote(n); }
+    Object.assign(n, r);
+    unsaved.delete(n.id);
+    changed = true;
+    if (n === current) {
+      if (n.deleted && soloId) window.close();
+      else if (document.activeElement !== editor) { setBody(n.body); syncPin(); }
+    }
+  }
+  if (changed) renderListSoon();
+});
 async function flush() {
   clearTimeout(saveT);
-  await idb.putMany(notes.filter((n) => n.dirty && !unsaved.has(n.id)));
+  await persist(notes.filter((n) => n.dirty && !unsaved.has(n.id)));
   sync.schedule(1200);
 }
 
@@ -184,6 +209,11 @@ function renderListSoon() {
   if (!listRaf) listRaf = requestAnimationFrame(() => { listRaf = 0; renderList(); });
 }
 
+list.addEventListener('dblclick', (e) => {
+  const li = e.target.closest('li[data-id]');
+  if (!li || mobile.matches) return;
+  window.open(`${location.pathname}?note=${li.dataset.id}`, `breeze-${li.dataset.id}`, 'popup,width=640,height=760');
+});
 let swipedAt = 0;
 list.addEventListener('click', (e) => {
   if (Date.now() - swipedAt < 400) return; // the click that ends a swipe
@@ -369,7 +399,9 @@ if (window.visualViewport) {
 $('#emptyNew').onclick = newNote;
 $('#backBtn').onclick = () => (history.state?.note ? history.back() : showList());
 addEventListener('popstate', () => { if (app.classList.contains('show-editor')) showList(); }); // Android back button
+app.classList.toggle('phone', mobile.matches);
 mobile.addEventListener('change', () => {
+  app.classList.toggle('phone', mobile.matches);
   app.classList.remove('show-editor', 'show-list');
   app.classList.add(mobile.matches && current ? 'show-editor' : 'show-list');
 });
@@ -600,6 +632,7 @@ function closeAndSelectNext(n) {
 }
 const undoStack = []; // notes trashed this session, newest last — ⌘Z brings them back
 function removeNote(n) {
+  if (soloId) { n.deleted = true; touch(n); flush().then(() => window.close()); return; }
   // leave the editor, otherwise ⌘Z would be taken as "undo typing" in the next note
   if (document.activeElement === editor) editor.blur();
   closeAndSelectNext(n);
@@ -746,7 +779,7 @@ const sync = (() => {
         else { setBody(n.body); syncPin(); }
       }
     }
-    if (changedNotes.length) { idb.putMany(changedNotes); renderList(); }
+    if (changedNotes.length) { persist(changedNotes); renderList(); }
   }
 
   function listen() {
@@ -804,7 +837,7 @@ const sync = (() => {
 })();
 
 /* ---------------- settings dialog ---------------- */
-const VERSION = 'v10';
+const VERSION = 'v11';
 $('#appVersion').textContent = `Breeze 노트 ${VERSION}`;
 $('#syncBtn').onclick = () => { $('#authMsg').textContent = ''; sync.ui(); $('#settings').showModal(); };
 $('#loginBtn').onclick = sync.login;
@@ -913,10 +946,10 @@ async function importAppleNotes(fileList) {
     const n = { id, body, pinned: false, deleted: false, updatedAt: r.modified, dirty: true };
     existing ? Object.assign(existing, n) : addNote(n);
     batch.push(existing || n);
-    if (batch.length >= 25) { await idb.putMany(batch); batch = []; renderListSoon(); }
+    if (batch.length >= 25) { await persist(batch); batch = []; renderListSoon(); }
     done++;
   }
-  await idb.putMany(batch);
+  await persist(batch);
   renderList();
   flush();
   msg.textContent = `${done}개를 가져왔습니다${skipped ? ` (이미 최신인 ${skipped}개는 건너뜀)` : ''}. 동기화가 끝날 때까지 앱을 열어 두세요.`;
@@ -930,7 +963,12 @@ $('#appleDir').onchange = (e) => { importAppleNotes(e.target.files).catch((err) 
   const expired = notes.filter((n) => inTrash(n) && Date.now() - n.updatedAt > TRASH_DAYS * 864e5);
   expired.forEach(purge);
   if (expired.length) flush();
-  if (!mobile.matches) open(visible()[0], { push: false });
+  if (soloId) {
+    app.classList.add('solo');
+    const n = index.get(soloId);
+    open(n && !n.deleted ? n : null, { push: false });
+    document.title = n ? info(n).title : 'Breeze 노트';
+  } else if (!mobile.matches) open(visible()[0], { push: false });
   else renderList();
   sync.init();
   requestAnimationFrame(() => app.classList.add('ready')); // enable transitions after first paint
