@@ -16,8 +16,11 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); o
 button { font: inherit; color: inherit; }
 
 #app { display: grid; grid-template-columns: clamp(250px, 32vw, 340px) minmax(0, 1fr); height: var(--vvh, 100dvh); }
-#app.focus { grid-template-columns: 0 minmax(0, 1fr); }
-#app.focus #sidebar { display: none; }
+/* full-screen note (◫ / ⌥⌘S): a single column, so the note doesn't fall into the hidden list's slot */
+@media (min-width: 600px) {
+  #app.focus { grid-template-columns: minmax(0, 1fr); }
+  #app.focus #sidebar { display: none; }
+}
 
 /* ---------- sidebar ---------- */
 #sidebar { min-width: 0; background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0;

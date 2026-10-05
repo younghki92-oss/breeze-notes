@@ -1,5 +1,5 @@
 // Offline shell: serve from cache instantly, refresh in the background (new versions apply on next launch).
-const CACHE = 'breeze-v8';
+const CACHE = 'breeze-v9';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {
