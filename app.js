@@ -3,7 +3,7 @@
 
 const $ = (s) => document.querySelector(s);
 const app = $('#app'), pane = $('#editorPane'), list = $('#list'), editor = $('#editor'), search = $('#search');
-const mobile = matchMedia('(max-width: 767px)');
+const mobile = matchMedia('(max-width: 599px)'); // single-pane phone layout (Fold cover screen); wider gets list | note
 
 /* ---------------- storage ---------------- */
 const idb = (() => {
@@ -265,8 +265,9 @@ function open(n, { focus = false, push = true } = {}) {
   setBody(n ? n.body : '');
   pane.classList.toggle('none', !n);
   pane.classList.toggle('trashed', !!n?.deleted);
-  setReading(touchUI && !focus);
+  setReading(readPref && !focus);
   syncPin();
+  $('#noteDate').textContent = n ? new Date(n.updatedAt).toLocaleString('ko-KR', { dateStyle: 'long', timeStyle: 'short' }) : '';
   if (n && mobile.matches && !app.classList.contains('show-editor')) {
     app.classList.replace('show-list', 'show-editor');
     if (push) history.pushState({ note: n.id }, '');
@@ -275,23 +276,31 @@ function open(n, { focus = false, push = true } = {}) {
   scrollActive();
   if (n && focus) { editor.focus(); caretEnd(); }
 }
-// Reading mode: the note can't be edited, so tapping it never brings up the keyboard.
-// Touch devices open notes this way; 편집 switches to editing, 완료 goes back.
+// Reading mode (📖 toggle): notes can't be edited, so tapping never brings up the keyboard.
+// It stays on across notes until toggled off.
 const touchUI = matchMedia('(pointer: coarse)').matches;
 document.documentElement.classList.toggle('touch', touchUI);
+let readPref = false;
+try { readPref = localStorage.getItem('breeze.reading') === '1'; } catch {}
 let reading = false;
 function setReading(on) {
   const editable = !!current && !current.deleted;
   reading = on && editable;
   editor.contentEditable = editable && !reading ? 'true' : 'false';
   pane.classList.toggle('reading', reading);
-  $('#modeBtn').textContent = reading ? '편집' : '완료';
+  $('#readBtn').classList.toggle('on', reading);
   if (reading && document.activeElement === editor) editor.blur();
 }
-$('#modeBtn').onclick = () => {
-  if (reading) { setReading(false); editor.focus(); caretEnd(); }
-  else setReading(true);
+$('#readBtn').onclick = () => {
+  readPref = !reading;
+  try { localStorage.setItem('breeze.reading', readPref ? '1' : ''); } catch {}
+  setReading(readPref);
+  toast(readPref ? '읽기 모드: 눌러도 키보드가 뜨지 않습니다' : '읽기 모드를 껐습니다');
 };
+// 완료 (touch): put the keyboard away
+$('#doneBtn').onclick = () => editor.blur();
+editor.addEventListener('focus', () => pane.classList.add('editing'));
+editor.addEventListener('blur', () => pane.classList.remove('editing'));
 function syncPin() { for (const b of document.querySelectorAll('[data-cmd=pin]')) b.classList.toggle('on', !!current?.pinned); }
 
 function showList() {
@@ -348,7 +357,7 @@ $('#purgeBtn').onclick = () => current && purgeNote(current);
 $('#newBtn').onclick = newNote;
 $('#composeBtn').onclick = newNote;
 // Wide screens (Mac, unfolded Fold): hide the list to write full-screen, like iPad.
-const setFocusMode = (on) => { app.classList.toggle('focus', on); try { localStorage.setItem('breeze.focus', on ? '1' : ''); } catch {} };
+function setFocusMode(on) { app.classList.toggle('focus', on); try { localStorage.setItem('breeze.focus', on ? '1' : ''); } catch {} }
 $('#focusBtn').onclick = () => setFocusMode(!app.classList.contains('focus'));
 try { if (localStorage.getItem('breeze.focus')) app.classList.add('focus'); } catch {}
 // Keep the bottom bar just above the on-screen keyboard on browsers that don't resize the page for it.
@@ -565,7 +574,11 @@ addEventListener('keydown', (e) => {
   if (mod && !e.shiftKey && e.key.toLowerCase() === 'n') { e.preventDefault(); newNote(); }
   else if (mod && e.shiftKey && e.key.toLowerCase() === 'l' && current) { e.preventDefault(); cmds.check(); }
   else if (mod && e.key.toLowerCase() === 'f' && !e.shiftKey) { e.preventDefault(); if (mobile.matches) showList(); search.focus(); }
+  else if (mod && e.altKey && e.code === 'KeyS') { e.preventDefault(); setFocusMode(!app.classList.contains('focus')); }
+  else if (mod && !e.shiftKey && e.key.toLowerCase() === 'z' && undoStack.length && !isTyping()) { e.preventDefault(); undoDelete(); }
 });
+// inside the editor or a text field ⌘Z keeps its normal meaning
+const isTyping = () => { const a = document.activeElement; return a === editor || a?.matches?.('input, textarea'); };
 
 /* ---------------- delete + undo ---------------- */
 let toastT;
@@ -585,13 +598,26 @@ function closeAndSelectNext(n) {
   if (mobile.matches) history.state?.note ? history.back() : showList();
   else open(next);
 }
+const undoStack = []; // notes trashed this session, newest last — ⌘Z brings them back
 function removeNote(n) {
   closeAndSelectNext(n);
   n.deleted = true;
   touch(n);
   flush();
   renderList();
-  toast('휴지통으로 옮겼습니다', '실행 취소', () => { n.deleted = false; touch(n); if (!trashMode) open(n); });
+  undoStack.push(n);
+  toast('휴지통으로 옮겼습니다', touchUI ? '실행 취소' : '실행 취소 ⌘Z', () => undoDelete(n));
+}
+function undoDelete(n = undoStack.at(-1)) {
+  if (!n) return;
+  undoStack.splice(undoStack.indexOf(n), 1);
+  if (!n.deleted || !hasContent(n)) return; // already restored or purged
+  n.deleted = false;
+  touch(n);
+  flush();
+  if (trashMode) renderList();
+  else { open(n); if (!mobile.matches) list.focus(); }
+  toast('노트를 복구했습니다');
 }
 function restoreNote(n) {
   closeAndSelectNext(n);
