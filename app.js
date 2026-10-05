@@ -97,24 +97,40 @@ function tagsOf(n) {
   return tags;
 }
 let activeTag = null;
-const visible = () => notes.filter((n) => !n.deleted).sort((a, b) => (b.pinned - a.pinned) || (b.updatedAt - a.updatedAt));
+// Deleted notes keep their body for 30 days (the trash); an empty body means permanently deleted.
+const TRASH_DAYS = 30;
+const hasContent = (n) => !!textOf(n).trim() || n.body.includes('<img');
+const inTrash = (n) => n.deleted && hasContent(n);
+let trashMode = false;
+const visible = () => trashMode
+  ? notes.filter(inTrash).sort((a, b) => b.updatedAt - a.updatedAt)
+  : notes.filter((n) => !n.deleted).sort((a, b) => (b.pinned - a.pinned) || (b.updatedAt - a.updatedAt));
+// what the list shows, in order — also drives arrow-key navigation
+function listed(all = visible()) {
+  const q = search.value.trim().toLowerCase();
+  return all.filter((n) => (!q || textOf(n).toLowerCase().includes(q)) && (!activeTag || tagsOf(n).includes(activeTag)));
+}
 
 /* ---------------- list ---------------- */
 const PIN = '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" style="margin-right:4px;color:var(--accent)"><path d="M9 3h6l-1 6 3 3v2h-4v8h-2v-8H7v-2l3-3Z"/></svg>';
 function renderList() {
-  const q = search.value.trim().toLowerCase();
+  const q = search.value.trim();
   const all = visible();
   renderTags(all);
-  const items = all.filter((n) => (!q || textOf(n).toLowerCase().includes(q)) && (!activeTag || tagsOf(n).includes(activeTag)));
+  const items = listed(all);
   const row = (n) => {
     const { title, preview } = info(n);
-    return `<li data-id="${n.id}" class="${n === current ? 'active' : ''}"><div class="t">${n.pinned ? PIN : ''}${esc(title)}</div><div class="p"><time>${fmt(n.updatedAt)}</time>${esc(preview)}</div></li>`;
+    const when = trashMode ? `${Math.max(1, Math.ceil(TRASH_DAYS - (Date.now() - n.updatedAt) / 864e5))}일 남음` : fmt(n.updatedAt);
+    return `<li data-id="${n.id}" class="${n === current ? 'active' : ''}"><div class="t">${n.pinned && !trashMode ? PIN : ''}${esc(title)}</div><div class="p"><time>${when}</time>${esc(preview)}</div></li>`;
   };
-  const pinned = items.filter((n) => n.pinned), rest = items.filter((n) => !n.pinned);
+  const trashCount = notes.filter(inTrash).length;
+  $('#trashCount').textContent = trashCount || '';
+  $('#emptyTrashBtn').hidden = !trashMode || !trashCount;
+  const pinned = trashMode ? [] : items.filter((n) => n.pinned), rest = items.filter((n) => trashMode || !n.pinned);
   let html = '';
   if (pinned.length) html += '<li class="sec">고정됨</li>' + pinned.map(row).join('') + (rest.length ? '<li class="sec">노트</li>' : '');
   html += rest.map(row).join('');
-  list.innerHTML = html || `<li class="none">${q ? '검색 결과 없음' : '노트가 없습니다'}</li>`;
+  list.innerHTML = html || `<li class="none">${q ? '검색 결과 없음' : trashMode ? '휴지통이 비어 있습니다' : '노트가 없습니다'}</li>`;
 }
 const tagBar = $('#tags');
 function renderTags(all) {
@@ -122,7 +138,7 @@ function renderTags(all) {
   for (const n of all) for (const t of tagsOf(n)) counts.set(t, (counts.get(t) || 0) + 1);
   if (activeTag && !counts.has(activeTag)) activeTag = null;
   const tags = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ko'));
-  tagBar.hidden = !tags.length;
+  tagBar.hidden = trashMode || !tags.length;
   tagBar.innerHTML = tags.map(([t, c]) => `<button class="tag${t === activeTag ? ' on' : ''}" data-tag="${esc(t)}">#${esc(t)}<span>${c}</span></button>`).join('');
 }
 tagBar.addEventListener('click', (e) => {
@@ -139,6 +155,26 @@ list.addEventListener('click', (e) => {
   if (li) open(index.get(li.dataset.id));
 });
 search.addEventListener('input', renderListSoon);
+
+// Apple Notes-style keyboard: with the list focused, ↑/↓ move between notes, ⌫ trashes, Enter/→ edits.
+list.tabIndex = 0;
+list.addEventListener('keydown', (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const order = listed();
+  const i = order.indexOf(current);
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    const n = i < 0 ? order[0] : order[Math.min(order.length - 1, Math.max(0, i + (e.key === 'ArrowDown' ? 1 : -1)))];
+    if (n && n !== current) open(n);
+  } else if ((e.key === 'Backspace' || e.key === 'Delete') && current) {
+    e.preventDefault();
+    trashMode ? purgeNote(current) : removeNote(current);
+  } else if ((e.key === 'Enter' || e.key === 'ArrowRight') && current && !current.deleted) {
+    e.preventDefault();
+    editor.focus(); caretEnd();
+  }
+});
+function scrollActive() { list.querySelector('li.active')?.scrollIntoView({ block: 'nearest' }); }
 search.addEventListener('keydown', (e) => { if (e.key === 'Escape') { search.value = ''; renderList(); } });
 
 /* ---------------- open / close ---------------- */
@@ -146,14 +182,16 @@ function open(n, { focus = false, push = true } = {}) {
   if (current && current !== n) leave(current);
   current = n || null;
   setBody(n ? n.body : '');
-  editor.contentEditable = n ? 'true' : 'false';
+  editor.contentEditable = n && !n.deleted ? 'true' : 'false';
   pane.classList.toggle('none', !n);
+  pane.classList.toggle('trashed', !!n?.deleted);
   $('#pinBtn').classList.toggle('on', !!n?.pinned);
   if (n && mobile.matches && app.className !== 'show-editor') {
     app.className = 'show-editor';
     if (push) history.pushState({ note: n.id }, '');
   }
   renderList();
+  scrollActive();
   if (n && focus) { editor.focus(); caretEnd(); }
 }
 function showList() {
@@ -166,7 +204,7 @@ function showList() {
 // Empty notes vanish when you leave them, like Apple Notes.
 function leave(n) {
   if (n.deleted) return;
-  if (!textOf(n).trim() && !n.body.includes('<img')) {
+  if (!hasContent(n)) {
     if (unsaved.has(n.id)) dropNote(n);
     else { n.deleted = true; touch(n); }
   }
@@ -177,11 +215,35 @@ function caretEnd() {
   const s = getSelection(); s.removeAllRanges(); s.addRange(r);
 }
 function newNote() {
+  if (trashMode) setTrash(false);
   const n = { id: crypto.randomUUID(), body: '', pinned: false, deleted: false, updatedAt: Date.now(), dirty: false };
   addNote(n); unsaved.add(n.id);
   search.value = '';
   open(n, { focus: true });
 }
+
+function setTrash(on) {
+  if (current) leave(current);
+  current = null;
+  trashMode = on;
+  activeTag = null;
+  search.value = '';
+  $('#sideTitle').textContent = on ? '휴지통' : '노트';
+  $('#trashLabel').textContent = on ? '‹ 모든 노트' : '휴지통';
+  $('#trashCount').hidden = on;
+  if (mobile.matches) showList();
+  else open(visible()[0]);
+}
+$('#trashBtn').onclick = () => setTrash(!trashMode);
+$('#emptyTrashBtn').onclick = () => {
+  const all = notes.filter(inTrash);
+  if (!all.length || !confirm(`휴지통의 노트 ${all.length}개를 영구 삭제할까요? 되돌릴 수 없습니다.`)) return;
+  all.forEach(purge);
+  flush();
+  open(null);
+};
+$('#restoreBtn').onclick = () => current && restoreNote(current);
+$('#purgeBtn').onclick = () => current && purgeNote(current);
 
 $('#newBtn').onclick = newNote;
 $('#emptyNew').onclick = newNote;
@@ -299,6 +361,7 @@ editor.addEventListener('pointerdown', (e) => {
   editor.dispatchEvent(new Event('input'));
 });
 editor.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !mobile.matches) { e.preventDefault(); editor.blur(); list.focus(); return; }
   if (e.key === 'Enter') setTimeout(() => { const li = elAt()?.closest('ul.checklist > li'); if (li && !li.textContent) li.classList.remove('done'); });
 });
 
@@ -352,13 +415,37 @@ function toast(msg, btn, fn) {
   clearTimeout(toastT);
   toastT = setTimeout(() => ($('#toast').hidden = true), 5000);
 }
+// After a note leaves the list, select its neighbour so ⌫ can be pressed repeatedly.
+function closeAndSelectNext(n) {
+  const order = listed(), i = order.indexOf(n);
+  const next = order[i + 1] || order[i - 1] || null;
+  current = null;
+  if (mobile.matches) history.state?.note ? history.back() : showList();
+  else open(next);
+}
 function removeNote(n) {
+  closeAndSelectNext(n);
   n.deleted = true;
   touch(n);
   flush();
-  if (mobile.matches) { current = null; history.state?.note ? history.back() : showList(); }
-  else { current = null; open(visible()[0]); }
-  toast('노트를 삭제했습니다', '실행 취소', () => { n.deleted = false; touch(n); open(n); });
+  renderList();
+  toast('휴지통으로 옮겼습니다', '실행 취소', () => { n.deleted = false; touch(n); if (!trashMode) open(n); });
+}
+function restoreNote(n) {
+  closeAndSelectNext(n);
+  n.deleted = false;
+  touch(n);
+  flush();
+  renderList();
+  toast('노트를 복구했습니다');
+}
+function purge(n) { n.body = ''; n.pinned = false; touch(n); }
+function purgeNote(n) {
+  if (!confirm('이 노트를 영구 삭제할까요? 되돌릴 수 없습니다.')) return;
+  closeAndSelectNext(n);
+  purge(n);
+  flush();
+  renderList();
 }
 
 /* ---------------- sync (Supabase) ---------------- */
@@ -562,6 +649,9 @@ $('#importFile').onchange = async (e) => {
 /* ---------------- boot ---------------- */
 (async () => {
   (await idb.all()).forEach(addNote);
+  const expired = notes.filter((n) => inTrash(n) && Date.now() - n.updatedAt > TRASH_DAYS * 864e5);
+  expired.forEach(purge);
+  if (expired.length) flush();
   if (!mobile.matches) open(visible()[0], { push: false });
   else renderList();
   sync.init();

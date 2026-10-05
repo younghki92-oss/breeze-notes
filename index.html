@@ -17,7 +17,7 @@
 <div id="app" class="show-list">
   <aside id="sidebar">
     <header class="side-head">
-      <h1>노트</h1>
+      <h1 id="sideTitle">노트</h1>
       <button id="syncBtn" class="icon-btn sync-btn" title="동기화 설정"><span id="syncDot" class="dot off"></span>동기화</button>
       <button id="newBtn" class="icon-btn" title="새 노트 (⌘N)">
         <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
@@ -26,6 +26,13 @@
     <input id="search" type="search" placeholder="검색" autocomplete="off">
     <div id="tags" hidden></div>
     <ul id="list"></ul>
+    <footer class="side-foot">
+      <button id="trashBtn" class="foot-btn">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
+        <span id="trashLabel">휴지통</span><span id="trashCount" class="count"></span>
+      </button>
+      <button id="emptyTrashBtn" class="foot-btn danger" hidden>휴지통 비우기</button>
+    </footer>
   </aside>
 
   <main id="editorPane" class="none">
@@ -33,6 +40,11 @@
       <button id="backBtn" class="icon-btn back">
         <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>노트
       </button>
+      <div class="trash-tools">
+        <span class="hint">휴지통에 있는 노트</span>
+        <button id="restoreBtn" class="pill">복구</button>
+        <button id="purgeBtn" class="pill danger">영구 삭제</button>
+      </div>
       <div class="tools">
         <button class="icon-btn" data-cmd="check" title="체크리스트 (⌘⇧L)"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg></button>
         <button class="icon-btn" data-cmd="list" title="글머리 목록"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1" fill="currentColor"/><circle cx="4.5" cy="12" r="1" fill="currentColor"/><circle cx="4.5" cy="18" r="1" fill="currentColor"/></svg></button>

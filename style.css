@@ -121,3 +121,28 @@ dialog::backdrop { background: #0006; }
 /* ---------- photos ---------- */
 #editor img { display: block; max-width: 100%; max-height: 70vh; border-radius: 10px; margin: 8px 0; }
 #editor img.missing { width: 220px; height: 140px; background: var(--field); }
+
+/* ---------- keyboard focus in list ---------- */
+#list:focus { outline: none; }
+#list:focus li.active { background: var(--accent); color: #1d1d1f; }
+#list:focus li.active .p, #list:focus li.active .p time { color: #1d1d1fb0; }
+#list:focus li.active svg { color: #1d1d1f !important; }
+
+/* ---------- trash ---------- */
+.side-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; border-top: 1px solid var(--line);
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); }
+.foot-btn { border: 0; background: none; color: var(--mute); display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 8px; border-radius: 8px; cursor: pointer; font-size: 14px; }
+.foot-btn:hover { background: var(--hover); color: var(--fg); }
+.foot-btn .count { font-size: 12px; background: var(--field); border-radius: 10px; padding: 0 7px; }
+.foot-btn .count:empty { display: none; }
+.foot-btn.danger { color: #ff453a; }
+.trash-tools { display: none; margin-left: auto; align-items: center; gap: 8px; }
+#editorPane.trashed .trash-tools { display: flex; }
+#editorPane.trashed .tools { display: none; }
+.pill { border: 1px solid var(--line); background: var(--side); border-radius: 16px; padding: 5px 14px; cursor: pointer; font-size: 14px; }
+.pill.danger { color: #ff453a; }
+#editorPane.trashed #editor { opacity: .75; }
+@media (max-width: 767px) { .trash-tools .hint { display: none; } }
+
+[hidden] { display: none !important; }
