@@ -41,14 +41,11 @@
             "application/pdf",
             "audio/*",
             "video/*",
-            "text/*",
-            ".hwp",
-            ".xlsx",
-            ".docx",
-            ".pptx"
+            "text/*"
           ]
         }
       ]
     }
-  }
+  },
+  "id": "./"
 }
