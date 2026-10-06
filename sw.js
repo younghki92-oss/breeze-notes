@@ -1,6 +1,6 @@
 // Offline shell. Online: always load the latest files (so old and new files never mix), falling back to
 // the cache if the network is slow or gone. Offline: served entirely from the cache.
-const CACHE = 'breeze-v15';
+const CACHE = 'breeze-v16';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png'];
 const NET_TIMEOUT = 2500;
 
@@ -10,7 +10,8 @@ self.addEventListener('install', (e) => {
   self.skipWaiting();
 });
 self.addEventListener('activate', (e) => {
-  e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
+  // 같은 사이트(younghki92-oss.github.io)의 다른 앱 저장분은 건드리지 않고, 이 앱의 옛 버전만 지움
+  e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k.startsWith('breeze-') && k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
 });
 self.addEventListener('fetch', (e) => {
   // Android share sheet → "Breeze 노트": keep what was shared, then open the app to turn it into a note
