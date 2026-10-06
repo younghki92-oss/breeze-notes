@@ -173,7 +173,7 @@ dialog::backdrop { background: #0006; }
 
 /* ---------- footer: trash · count · compose ---------- */
 .side-foot { position: relative; min-height: 52px; }
-.note-count { position: absolute; left: 50%; transform: translateX(-50%); font-size: 12px; color: var(--mute); pointer-events: none; }
+.note-count { flex: 1; min-width: 0; text-align: center; font-size: 12px; color: var(--mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
 .compose { margin-left: auto; }
 
 /* ---------- reading mode / mode button ---------- */
@@ -324,3 +324,17 @@ html.touch #editorPane.editing .mode-btn { display: inline-flex; }
 .hdr-right { display: flex; align-items: center; gap: 2px; }
 .undo-btn { display: none !important; }
 html.touch #editorPane.editing:not(.reading) .undo-btn { display: inline-flex !important; }
+
+/* ---------- touch screens of any size (Fold unfolded too): writing tools live at the bottom ---------- */
+html.touch .ed-bar { display: flex; align-items: center; gap: 4px; padding: 4px 10px calc(4px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line); background: var(--bg); }
+html.touch .ed-bar .grp { display: flex; gap: 2px; flex: 1; }
+html.touch .ed-head .tools .fmt { display: none; }
+html.touch #editorPane.reading .ed-bar .edit-grp, html.touch #editorPane:not(.reading) .ed-bar .read-grp { display: none; }
+html.touch #editorPane.trashed .ed-bar, html.touch #editorPane.none .ed-bar { display: none; }
+@media (min-width: 600px) {
+  /* wide (unfolded): 고정·삭제 stay in the top bar, so the bottom bar is only the writing tools, centred */
+  html.touch .ed-bar .read-grp, html.touch #editorPane.reading .ed-bar { display: none; }
+  html.touch .ed-bar .edit-grp { justify-content: center; gap: 22px; }
+  html.touch .ed-bar .icon-btn { min-width: 46px; height: 46px; }
+}
