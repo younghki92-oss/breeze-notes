@@ -841,6 +841,7 @@ const cmds = {
   new: () => newNote(),
   photo: () => photoInput.click(),
   file: () => fileInput.click(),
+  clip: () => pasteFromClipboard(),
 };
 for (const b of document.querySelectorAll('[data-cmd]')) {
   b.addEventListener('pointerdown', (e) => e.preventDefault()); // keep the caret in the editor
@@ -1088,7 +1089,7 @@ const sync = (() => {
 })();
 
 /* ---------------- settings dialog ---------------- */
-const VERSION = 'v13';
+const VERSION = 'v14';
 $('#appVersion').textContent = `Breeze 노트 ${VERSION}`;
 $('#syncBtn').onclick = () => { $('#authMsg').textContent = ''; sync.ui(); $('#settings').showModal(); };
 $('#loginBtn').onclick = sync.login;
@@ -1208,6 +1209,63 @@ async function importAppleNotes(fileList) {
 $('#appleBtn').onclick = () => $('#appleDir').click();
 $('#appleDir').onchange = (e) => { importAppleNotes(e.target.files).catch((err) => ($('#authMsg').textContent = '가져오기 실패: ' + err.message)); e.target.value = ''; };
 
+/* ---------------- clipboard button & shared items ---------------- */
+// Phone keyboards refuse to paste images into web apps, so 📋 reads the clipboard directly (asks permission once).
+async function pasteFromClipboard() {
+  if (!current) return;
+  if (!navigator.clipboard?.read) { toast('이 브라우저는 클립보드 읽기를 지원하지 않습니다'); return; }
+  try {
+    const files = [];
+    let text = '';
+    for (const item of await navigator.clipboard.read()) {
+      const type = item.types.find((t) => t.startsWith('image/'));
+      if (type) files.push(new File([await item.getType(type)], '붙여넣은 이미지', { type }));
+      else if (item.types.includes('text/plain')) text += await (await item.getType('text/plain')).text();
+    }
+    if (files.length) await insertFiles(files);
+    else if (text) document.execCommand('insertText', false, text);
+    else toast('클립보드에 붙여넣을 내용이 없습니다');
+  } catch {
+    toast('클립보드 접근이 막혀 있습니다. 브라우저의 사이트 설정에서 허용해 주세요');
+  }
+}
+// Items sent from the Android share sheet (sw.js parks them in the 'breeze-inbox' database) become new notes.
+function inboxTake() {
+  return new Promise((resolve) => {
+    const r = indexedDB.open('breeze-inbox', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('items', { autoIncrement: true });
+    r.onerror = () => resolve([]);
+    r.onsuccess = () => {
+      const t = r.result.transaction('items', 'readwrite'), st = t.objectStore('items');
+      const all = st.getAll();
+      all.onsuccess = () => st.clear();
+      t.oncomplete = () => resolve(all.result || []);
+      t.onerror = () => resolve([]);
+    };
+  });
+}
+async function receiveShared() {
+  const items = await inboxTake();
+  let last = null;
+  for (const it of items) {
+    const lines = [it.title, ...String(it.text || '').split('\n')].map((l) => l.trim()).filter(Boolean);
+    let body = lines.length ? lines.map((l) => `<div>${esc(l)}</div>`).join('') : '<div>공유한 항목</div>';
+    if (it.url && !lines.some((l) => l.includes(it.url))) body += `<div><a href="${esc(it.url)}">${esc(it.url)}</a></div>`;
+    for (const f of it.files || []) {
+      const pid = isPhoto(f) ? await storePhoto(f) : null;
+      if (pid) body += `<img data-img="${pid}">`;
+      else if (f.size <= MAX_FILE) body += `<div>${fileChip(await storeBlob(f), f.name || '파일', f.size)}</div>`;
+    }
+    last = { id: crypto.randomUUID(), body, pinned: false, deleted: false, updatedAt: it.at || Date.now(), dirty: true };
+    addNote(last);
+  }
+  if (!last) return;
+  await flush();
+  history.replaceState(null, '', location.pathname); // drop ?shared=1 so a reload doesn't repeat
+  open(last);
+  toast(items.length > 1 ? `공유한 항목 ${items.length}개를 노트로 만들었습니다` : '공유한 항목을 새 노트로 만들었습니다');
+}
+
 /* ---------------- boot ---------------- */
 (async () => {
   (await idb.all()).forEach(addNote);
@@ -1223,6 +1281,7 @@ $('#appleDir').onchange = (e) => { importAppleNotes(e.target.files).catch((err) 
   else renderList();
   sync.init();
   requestAnimationFrame(() => app.classList.add('ready')); // enable transitions after first paint
+  receiveShared();
   if ('serviceWorker' in navigator) {
     const hadController = !!navigator.serviceWorker.controller;
     navigator.serviceWorker.register('sw.js').then((reg) => {

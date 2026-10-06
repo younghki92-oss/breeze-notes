@@ -1,6 +1,6 @@
 // Offline shell. Online: always load the latest files (so old and new files never mix), falling back to
 // the cache if the network is slow or gone. Offline: served entirely from the cache.
-const CACHE = 'breeze-v13';
+const CACHE = 'breeze-v14';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png'];
 const NET_TIMEOUT = 2500;
 
@@ -13,6 +13,16 @@ self.addEventListener('activate', (e) => {
   e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
 });
 self.addEventListener('fetch', (e) => {
+  // Android share sheet → "Breeze 노트": keep what was shared, then open the app to turn it into a note
+  if (e.request.method === 'POST' && new URL(e.request.url).pathname.endsWith('/share')) {
+    e.respondWith((async () => {
+      const fd = await e.request.formData();
+      const item = { at: Date.now(), title: fd.get('title') || '', text: fd.get('text') || '', url: fd.get('url') || '', files: fd.getAll('files').filter((f) => f && f.size) };
+      await inboxPut(item);
+      return Response.redirect(new URL('./?shared=1', self.registration.scope).href, 303);
+    })());
+    return;
+  }
   if (e.request.method !== 'GET') return;
   const u = new URL(e.request.url);
   if (u.hostname === 'cdn.jsdelivr.net') { // versioned library files: cache first
@@ -39,3 +49,13 @@ self.addEventListener('fetch', (e) => {
     }
   }));
 });
+
+// Shared items wait here until the app picks them up (a separate database, so the app's own schema is untouched).
+function inboxPut(item) {
+  return new Promise((resolve, reject) => {
+    const r = indexedDB.open('breeze-inbox', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('items', { autoIncrement: true });
+    r.onsuccess = () => { const t = r.result.transaction('items', 'readwrite'); t.objectStore('items').add(item); t.oncomplete = resolve; t.onerror = () => reject(t.error); };
+    r.onerror = () => reject(r.error);
+  });
+}

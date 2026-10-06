@@ -316,3 +316,6 @@ html.touch #editorPane.editing .mode-btn { display: inline-flex; }
 }
 /* the image box hugs the photo itself (no letterbox), so rounded corners sit on the photo */
 #list li.att-photo img { width: auto; height: auto; max-width: 100%; max-height: 100%; background: none; }
+@media (max-width: 599px) and (pointer: coarse), (max-width: 419px) {
+  .ed-bar .icon-btn { min-width: 40px; }
+}
