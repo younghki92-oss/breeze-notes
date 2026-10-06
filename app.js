@@ -539,8 +539,6 @@ $('#readBtn').onclick = () => {
   setReading(readPref);
   toast(readPref ? '읽기 모드: 눌러도 키보드가 뜨지 않습니다' : '읽기 모드를 껐습니다');
 };
-// 완료 (touch): put the keyboard away
-$('#doneBtn').onclick = () => editor.blur();
 editor.addEventListener('focus', () => pane.classList.add('editing'));
 editor.addEventListener('blur', () => pane.classList.remove('editing'));
 function syncPin() { for (const b of document.querySelectorAll('[data-cmd=pin]')) b.classList.toggle('on', !!current?.pinned); }
@@ -887,6 +885,9 @@ const cmds = {
   photo: () => photoInput.click(),
   file: () => fileInput.click(),
   clip: () => pasteFromClipboard(),
+  // ↶ ↷ while typing on a phone or Fold, where there's no ⌘Z
+  undo: () => document.execCommand('undo'),
+  redo: () => document.execCommand('redo'),
 };
 for (const b of document.querySelectorAll('[data-cmd]')) {
   b.addEventListener('pointerdown', (e) => e.preventDefault()); // keep the caret in the editor
@@ -1134,7 +1135,7 @@ const sync = (() => {
 })();
 
 /* ---------------- settings dialog ---------------- */
-const VERSION = 'v16';
+const VERSION = 'v17';
 $('#appVersion').textContent = `Breeze 노트 ${VERSION}`;
 $('#syncBtn').onclick = () => { $('#authMsg').textContent = ''; sync.ui(); $('#settings').showModal(); };
 $('#loginBtn').onclick = sync.login;

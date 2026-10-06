@@ -189,7 +189,7 @@ html.touch #editorPane.editing .mode-btn { display: inline-flex; }
 @media (max-width: 599px) and (pointer: coarse), (max-width: 419px) {
   .wide-only, #newBtn { display: none; }
   .ed-head .tools { display: none; }
-  .ed-head .read-btn { margin-left: auto; }
+  .ed-head .hdr-right { margin-left: auto; }
   .ed-bar { display: flex; align-items: center; gap: 4px; padding: 4px 10px calc(4px + env(safe-area-inset-bottom));
     border-top: 1px solid var(--line); background: var(--bg); }
   .ed-bar .grp { display: flex; gap: 2px; flex: 1; }
@@ -319,3 +319,8 @@ html.touch #editorPane.editing .mode-btn { display: inline-flex; }
 @media (max-width: 599px) and (pointer: coarse), (max-width: 419px) {
   .ed-bar .icon-btn { min-width: 40px; }
 }
+
+/* header right: ↶ ↷ (touch, while typing) and 📖 */
+.hdr-right { display: flex; align-items: center; gap: 2px; }
+.undo-btn { display: none !important; }
+html.touch #editorPane.editing:not(.reading) .undo-btn { display: inline-flex !important; }
