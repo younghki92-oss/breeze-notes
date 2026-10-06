@@ -628,8 +628,51 @@ mobile.addEventListener('change', () => {
 /* ---------------- editor ---------------- */
 document.execCommand('defaultParagraphSeparator', false, 'div');
 
-editor.addEventListener('input', () => {
+/* ---------------- links: pasted or typed URLs become hyperlinks ---------------- */
+const HAS_URL = /(?:https?:\/\/|www\.)\S/i;
+const URL_RE = /(?:https?:\/\/|www\.)[^\s<>"']*[^\s<>"'.,;:!?)\]}]/gi;
+const hrefOf = (u) => (/^www\./i.test(u) ? `https://${u}` : u);
+function linkifyText(text) {
+  return text.split(/\r?\n/).map((line) => {
+    let out = '', last = 0;
+    for (const m of line.matchAll(URL_RE)) {
+      out += esc(line.slice(last, m.index)) + `<a href="${esc(hrefOf(m[0]))}">${esc(m[0])}</a>`;
+      last = m.index + m[0].length;
+    }
+    return out + esc(line.slice(last));
+  }).join('<br>');
+}
+// wrap a URL that ends at `end` inside a text node (called right after a space or Enter is typed)
+function linkifyAt(node, end) {
+  if (!node || node.nodeType !== 3 || node.parentElement.closest('a')) return;
+  const m = /(?:https?:\/\/|www\.)[^\s<>"']+$/i.exec(node.data.slice(0, end));
+  if (!m) return;
+  const url = m[0].replace(/[.,;:!?)\]}]+$/, '');
+  if (url.length < 8) return;
+  const r = document.createRange();
+  r.setStart(node, m.index);
+  r.setEnd(node, m.index + url.length);
+  const a = document.createElement('a');
+  a.href = hrefOf(url);
+  r.surroundContents(a);
+}
+function lastText(el) {
+  const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let t = null;
+  for (let n; (n = w.nextNode());) if (n.data.trim()) t = n;
+  return t;
+}
+
+editor.addEventListener('input', (e) => {
   if (!current) return;
+  if (e.inputType === 'insertText' && /\s/.test(e.data || '')) {
+    const sel = getSelection();
+    linkifyAt(sel.anchorNode, sel.anchorOffset - e.data.length);
+  } else if (e.inputType === 'insertParagraph') {
+    const prev = elAt()?.closest('#editor > *, li')?.previousElementSibling;
+    const t = prev && lastText(prev);
+    if (t) linkifyAt(t, t.data.length);
+  }
   for (const img of editor.querySelectorAll('img:not([data-img])')) if (img.src) adoptImage(img);
   const f = editor.firstChild;
   if (f && f.nodeType === 3 && getSelection().anchorNode === f) document.execCommand('formatBlock', false, '<div>');
@@ -652,7 +695,9 @@ editor.addEventListener('paste', async (e) => {
     const blobs = await Promise.all(srcs.map((u) => fetch(u).then((r) => r.blob()).catch(() => null)));
     return insertFiles(blobs.filter(Boolean).map((b, i) => new File([b], `붙여넣은 이미지 ${i + 1}`, { type: b.type })));
   }
-  document.execCommand('insertText', false, e.clipboardData.getData('text/plain'));
+  const text = e.clipboardData.getData('text/plain');
+  if (HAS_URL.test(text)) document.execCommand('insertHTML', false, linkifyText(text));
+  else document.execCommand('insertText', false, text);
 });
 editor.addEventListener('beforeinput', (e) => {
   if (!/^insertFrom(Paste|Drop)|insertReplacementText/.test(e.inputType)) return;
@@ -1089,7 +1134,7 @@ const sync = (() => {
 })();
 
 /* ---------------- settings dialog ---------------- */
-const VERSION = 'v15';
+const VERSION = 'v16';
 $('#appVersion').textContent = `Breeze 노트 ${VERSION}`;
 $('#syncBtn').onclick = () => { $('#authMsg').textContent = ''; sync.ui(); $('#settings').showModal(); };
 $('#loginBtn').onclick = sync.login;
