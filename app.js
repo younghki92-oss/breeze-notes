@@ -919,18 +919,21 @@ for (const b of document.querySelectorAll('[data-cmd]')) {
 }
 
 /* ---------------- Aa style menu (like Apple Notes) ---------------- */
-const STYLES = { title: 'h1', heading: 'h2', subheading: 'h3', body: 'div', mono: 'pre' };
+// 본문 uses <p> so that choosing it on the first line really turns the automatic title off
+const STYLES = { title: 'h1', heading: 'h2', subheading: 'h3', body: 'p', mono: 'pre' };
 const styleMenu = $('#styleMenu');
 function currentStyle() {
-  const b = elAt()?.closest('#editor h1, #editor h2, #editor h3, #editor pre');
-  return b ? Object.keys(STYLES).find((k) => STYLES[k] === b.tagName.toLowerCase()) : 'body';
+  const b = elAt()?.closest('#editor h1, #editor h2, #editor h3, #editor pre, #editor p, #editor div');
+  if (!b || b === editor) return 'body';
+  if (b.classList.contains('title') && b.tagName === 'DIV') return 'title'; // the automatic first-line title
+  return Object.keys(STYLES).find((k) => STYLES[k] === b.tagName.toLowerCase()) || 'body';
 }
 function applyStyle(name) {
   const tag = STYLES[name];
   if (!tag || !current) return;
   if (!editor.contains(getSelection().anchorNode)) { editor.focus(); caretEnd(); }
   const ul = ulAt();
-  if (ul && tag !== 'div') document.execCommand(ul.tagName === 'OL' ? 'insertOrderedList' : 'insertUnorderedList'); // leave the list first
+  if (ul && tag !== 'p') document.execCommand(ul.tagName === 'OL' ? 'insertOrderedList' : 'insertUnorderedList'); // leave the list first
   document.execCommand('formatBlock', false, `<${tag}>`);
   changed();
 }
@@ -1197,7 +1200,7 @@ const sync = (() => {
 })();
 
 /* ---------------- settings dialog ---------------- */
-const VERSION = 'v21';
+const VERSION = 'v22';
 $('#appVersion').textContent = `Breeze 노트 ${VERSION}`;
 $('#syncBtn').onclick = () => { $('#authMsg').textContent = ''; sync.ui(); $('#settings').showModal(); };
 $('#loginBtn').onclick = sync.login;
