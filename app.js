@@ -99,7 +99,7 @@ const textCache = new Map();
 function textOf(n) {
   const c = textCache.get(n.id);
   if (c && c[0] === n.body) return c[1];
-  decoder.innerHTML = n.body.replace(/<(br|\/div|\/p|\/li|\/h[1-6])\b[^>]*>/gi, '\n').replace(/<[^>]*>/g, '');
+  decoder.innerHTML = n.body.replace(/<(br|\/div|\/p|\/li|\/h[1-6]|\/pre)\b[^>]*>/gi, '\n').replace(/<[^>]*>/g, '');
   const t = decoder.value;
   textCache.set(n.id, [n.body, t]);
   return t;
@@ -748,7 +748,7 @@ function setBody(html) {
 }
 // The title is the first line that has text — the innermost block holding it, so a note whose
 // whole body sits inside one wrapper (common in imported Apple Notes) doesn't turn into one big title.
-const BLOCKS = 'div,p,h1,h2,h3,li';
+const BLOCKS = 'div,p,h1,h2,h3,pre,li';
 function markTitle() {
   let title = null;
   for (const el of editor.querySelectorAll(BLOCKS)) {
@@ -880,12 +880,12 @@ editor.addEventListener('keydown', (e) => {
 });
 
 const elAt = () => { const n = getSelection().anchorNode; return n && (n.nodeType === 1 ? n : n.parentElement); };
-const ulAt = () => elAt()?.closest('#editor ul');
+const ulAt = () => elAt()?.closest('#editor ul, #editor ol');
 const changed = () => editor.dispatchEvent(new Event('input'));
 
 const cmds = {
   bold: () => document.execCommand('bold'),
-  heading: () => document.execCommand('formatBlock', false, elAt()?.closest('#editor h2') ? '<div>' : '<h2>'),
+  heading: (btn) => openStyleMenu(btn), // Aa: 제목 · 머리말 · 부머리말 · 본문 · 고정폭, B I U S, lists
   list: () => {
     const ul = ulAt();
     if (ul?.classList.contains('checklist')) { ul.classList.remove('checklist'); changed(); }
@@ -914,12 +914,55 @@ for (const b of document.querySelectorAll('[data-cmd]')) {
     if (!current) return;
     const c = b.dataset.cmd;
     if (!['pin', 'del', 'photo', 'file', 'new'].includes(c) && !editor.contains(getSelection().anchorNode)) { editor.focus(); caretEnd(); }
-    cmds[c]();
+    cmds[c](b);
   });
 }
 
+/* ---------------- Aa style menu (like Apple Notes) ---------------- */
+const STYLES = { title: 'h1', heading: 'h2', subheading: 'h3', body: 'div', mono: 'pre' };
+const styleMenu = $('#styleMenu');
+function currentStyle() {
+  const b = elAt()?.closest('#editor h1, #editor h2, #editor h3, #editor pre');
+  return b ? Object.keys(STYLES).find((k) => STYLES[k] === b.tagName.toLowerCase()) : 'body';
+}
+function applyStyle(name) {
+  const tag = STYLES[name];
+  if (!tag || !current) return;
+  if (!editor.contains(getSelection().anchorNode)) { editor.focus(); caretEnd(); }
+  const ul = ulAt();
+  if (ul && tag !== 'div') document.execCommand(ul.tagName === 'OL' ? 'insertOrderedList' : 'insertUnorderedList'); // leave the list first
+  document.execCommand('formatBlock', false, `<${tag}>`);
+  changed();
+}
+function openStyleMenu(btn) {
+  if (!styleMenu.hidden) { styleMenu.hidden = true; return; }
+  const cur = currentStyle();
+  for (const b of styleMenu.querySelectorAll('[data-style]')) b.classList.toggle('on', b.dataset.style === cur);
+  for (const b of styleMenu.querySelectorAll('[data-inline]')) b.classList.toggle('on', document.queryCommandState(b.dataset.inline));
+  styleMenu.hidden = false;
+  // open beside the Aa button: below it at the top of the screen, above it at the bottom
+  const r = btn.getBoundingClientRect(), m = styleMenu.getBoundingClientRect();
+  const left = Math.max(8, Math.min(innerWidth - m.width - 8, r.right - m.width));
+  const top = r.bottom + m.height + 8 < innerHeight ? r.bottom + 6 : r.top - m.height - 6;
+  styleMenu.style.left = `${left}px`;
+  styleMenu.style.top = `${Math.max(8, top)}px`;
+}
+for (const b of styleMenu.querySelectorAll('button')) b.addEventListener('pointerdown', (e) => e.preventDefault()); // keep the selection
+styleMenu.addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.style) { applyStyle(b.dataset.style); styleMenu.hidden = true; }
+  else if (b.dataset.inline) { document.execCommand(b.dataset.inline); b.classList.toggle('on', document.queryCommandState(b.dataset.inline)); changed(); }
+  else if (b.dataset.list) { document.execCommand(b.dataset.list === 'ol' ? 'insertOrderedList' : 'insertUnorderedList'); ulAt()?.classList.remove('checklist'); changed(); styleMenu.hidden = true; }
+});
+document.addEventListener('pointerdown', (e) => { if (!styleMenu.hidden && !e.target.closest('#styleMenu, [data-cmd=heading]')) styleMenu.hidden = true; });
+
 addEventListener('keydown', (e) => {
   const mod = e.metaKey || e.ctrlKey;
+  // Apple Notes shortcuts: ⇧⌘T 제목, ⇧⌘H 머리말, ⇧⌘J 부머리말, ⇧⌘B 본문
+  const styleKey = { KeyT: 'title', KeyH: 'heading', KeyJ: 'subheading', KeyB: 'body' }[e.code];
+  if (mod && e.shiftKey && styleKey && document.activeElement === editor) { e.preventDefault(); applyStyle(styleKey); return; }
+  if (e.key === 'Escape') styleMenu.hidden = true;
   if (mod && !e.shiftKey && e.key.toLowerCase() === 'n') { e.preventDefault(); newNote(); }
   else if (mod && e.shiftKey && e.key.toLowerCase() === 'l' && current) { e.preventDefault(); cmds.check(); }
   else if (mod && e.key.toLowerCase() === 'f' && !e.shiftKey) { e.preventDefault(); if (single()) showList(); search.focus(); }
@@ -1154,7 +1197,7 @@ const sync = (() => {
 })();
 
 /* ---------------- settings dialog ---------------- */
-const VERSION = 'v20';
+const VERSION = 'v21';
 $('#appVersion').textContent = `Breeze 노트 ${VERSION}`;
 $('#syncBtn').onclick = () => { $('#authMsg').textContent = ''; sync.ui(); $('#settings').showModal(); };
 $('#loginBtn').onclick = sync.login;
