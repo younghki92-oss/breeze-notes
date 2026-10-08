@@ -674,7 +674,13 @@ editor.addEventListener('input', (e) => {
   for (const img of editor.querySelectorAll('img:not([data-img])')) if (img.src) adoptImage(img);
   const f = editor.firstChild;
   if (f && f.nodeType === 3 && getSelection().anchorNode === f) document.execCommand('formatBlock', false, '<div>');
-  current.body = editor.innerHTML.replace(/<img\b[^>]*?data-img="([^"]+)"[^>]*>/g, '<img data-img="$1">');
+  markTitle();
+  current.body = editor.innerHTML
+    .replace(/<img\b[^>]*?data-img="([^"]+)"[^>]*>/g, '<img data-img="$1">')
+    .replace(/ class="([^"]*)"/g, (_m, c) => { // the title mark is display-only
+      const keep = c.split(/\s+/).filter((k) => k && k !== 'title');
+      return keep.length ? ` class="${keep.join(' ')}"` : '';
+    });
   touch(current);
   highlightSoon();
 });
@@ -736,8 +742,21 @@ editor.addEventListener('click', (e) => {
 
 function setBody(html) {
   editor.innerHTML = html || (current ? '<div><br></div>' : '');
+  markTitle();
   hydrate();
   highlightTags();
+}
+// The title is the first line that has text — the innermost block holding it, so a note whose
+// whole body sits inside one wrapper (common in imported Apple Notes) doesn't turn into one big title.
+const BLOCKS = 'div,p,h1,h2,h3,li';
+function markTitle() {
+  let title = null;
+  for (const el of editor.querySelectorAll(BLOCKS)) {
+    if (!el.querySelector(BLOCKS) && el.textContent.trim()) { title = el; break; }
+  }
+  // Enter copies the line's class onto the new line, so clear every other mark
+  for (const el of editor.querySelectorAll('.title')) if (el !== title) { el.classList.remove('title'); if (!el.className) el.removeAttribute('class'); }
+  title?.classList.add('title');
 }
 
 // Tags are coloured with the CSS Highlight API, so the editable DOM is never touched.
@@ -1135,7 +1154,7 @@ const sync = (() => {
 })();
 
 /* ---------------- settings dialog ---------------- */
-const VERSION = 'v19';
+const VERSION = 'v20';
 $('#appVersion').textContent = `Breeze 노트 ${VERSION}`;
 $('#syncBtn').onclick = () => { $('#authMsg').textContent = ''; sync.ui(); $('#settings').showModal(); };
 $('#loginBtn').onclick = sync.login;
