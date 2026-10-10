@@ -508,6 +508,10 @@ function open(n, { focus = false, push = true } = {}) {
   pane.classList.toggle('none', !n);
   pane.classList.toggle('trashed', !!n?.deleted);
   setReading(readPref && !focus);
+  // opened from a list search → jump to the first place the words appear; otherwise keep an open find bar going
+  const q = search.value.trim();
+  if (n && q && !soloId) openFind(q, { focus: false });
+  else if (!findBar.hidden) n && !n.deleted ? runFind() : closeFind();
   syncPin();
   $('#noteDate').textContent = n ? new Date(n.updatedAt).toLocaleString('ko-KR', { dateStyle: 'long', timeStyle: 'short' }) : '';
   if (n && single() && !app.classList.contains('show-editor')) {
@@ -683,6 +687,7 @@ editor.addEventListener('input', (e) => {
     });
   touch(current);
   highlightSoon();
+  if (!findBar.hidden) runFind({ keep: true, scroll: false }); // matches follow the text while typing
 });
 // Images can arrive as files, as clipboard items (Android keyboards), or as data: URLs inside pasted HTML.
 const clipFiles = (dt) => {
@@ -968,7 +973,13 @@ addEventListener('keydown', (e) => {
   if (e.key === 'Escape') styleMenu.hidden = true;
   if (mod && !e.shiftKey && e.key.toLowerCase() === 'n') { e.preventDefault(); newNote(); }
   else if (mod && e.shiftKey && e.key.toLowerCase() === 'l' && current) { e.preventDefault(); cmds.check(); }
-  else if (mod && e.key.toLowerCase() === 'f' && !e.shiftKey) { e.preventDefault(); if (single()) showList(); search.focus(); }
+  // ⌘F finds inside the open note; ⌥⌘F searches all notes (Apple Notes does the same)
+  else if (mod && e.code === 'KeyF' && !e.shiftKey) {
+    e.preventDefault();
+    const noteOnScreen = current && !current.deleted && !(single() && app.classList.contains('show-list'));
+    if (noteOnScreen && !e.altKey) openFind();
+    else { if (single()) showList(); search.focus(); }
+  }
   else if (mod && e.altKey && e.code === 'KeyS') { e.preventDefault(); setFocusMode(!app.classList.contains('focus')); }
   else if (mod && !e.shiftKey && e.key.toLowerCase() === 'z' && undoStack.length && !isTyping()) { e.preventDefault(); undoDelete(); }
 });
@@ -1200,7 +1211,7 @@ const sync = (() => {
 })();
 
 /* ---------------- settings dialog ---------------- */
-const VERSION = 'v22';
+const VERSION = 'v23';
 $('#appVersion').textContent = `Breeze 노트 ${VERSION}`;
 $('#syncBtn').onclick = () => { $('#authMsg').textContent = ''; sync.ui(); $('#settings').showModal(); };
 $('#loginBtn').onclick = sync.login;
@@ -1376,6 +1387,75 @@ async function receiveShared() {
   open(last);
   toast(items.length > 1 ? `공유한 항목 ${items.length}개를 노트로 만들었습니다` : '공유한 항목을 새 노트로 만들었습니다');
 }
+
+/* ---------------- find in note (⌘F / 🔍) ---------------- */
+const findBar = $('#findBar'), findInput = $('#findInput');
+let findRanges = [], findIdx = -1;
+function runFind({ keep = false, scroll = true } = {}) {
+  const q = findInput.value.trim().toLowerCase();
+  findRanges = [];
+  if (q) {
+    const walk = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+    for (let t; (t = walk.nextNode());) {
+      const lower = t.data.toLowerCase();
+      for (let i = lower.indexOf(q); i !== -1; i = lower.indexOf(q, i + q.length)) {
+        const r = new Range();
+        r.setStart(t, i);
+        r.setEnd(t, i + q.length);
+        findRanges.push(r);
+      }
+    }
+  }
+  findIdx = !findRanges.length ? -1 : keep ? Math.min(Math.max(findIdx, 0), findRanges.length - 1) : 0;
+  paintFind(scroll);
+}
+function paintFind(scroll = true) {
+  if (window.Highlight && CSS.highlights) {
+    CSS.highlights.set('find', new Highlight(...findRanges));
+    CSS.highlights.set('find-current', new Highlight(...(findIdx >= 0 ? [findRanges[findIdx]] : [])));
+  }
+  $('#findCount').textContent = !findInput.value.trim() ? '' : findRanges.length ? `${findIdx + 1}/${findRanges.length}` : '없음';
+  if (scroll && findIdx >= 0) {
+    // bring the current match to the upper third of the note
+    const r = findRanges[findIdx].getBoundingClientRect(), box = editor.getBoundingClientRect();
+    if (r.top < box.top + 40 || r.bottom > box.bottom - 40) editor.scrollTop += r.top - box.top - box.height / 3;
+  }
+}
+function stepFind(d) {
+  if (!findRanges.length) return;
+  findIdx = (findIdx + d + findRanges.length) % findRanges.length;
+  paintFind();
+}
+function openFind(q, { focus = true } = {}) {
+  if (!current) return;
+  findBar.hidden = false;
+  if (q != null) findInput.value = q;
+  if (focus) { findInput.focus(); findInput.select(); }
+  runFind();
+}
+function closeFind({ toMatch = false } = {}) {
+  const r = findRanges[findIdx];
+  findBar.hidden = true;
+  findRanges = [];
+  findIdx = -1;
+  CSS.highlights?.delete('find');
+  CSS.highlights?.delete('find-current');
+  // leave the cursor at the match you were looking at, ready to edit (not in reading mode)
+  if (toMatch && r && !reading && current && !current.deleted) {
+    editor.focus();
+    const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+  }
+}
+findInput.addEventListener('input', () => runFind());
+findInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); stepFind(e.shiftKey ? -1 : 1); }
+  else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeFind({ toMatch: true }); }
+});
+$('#findBtn').onclick = () => (findBar.hidden ? openFind() : closeFind());
+$('#findNext').onclick = () => stepFind(1);
+$('#findPrev').onclick = () => stepFind(-1);
+$('#findClose').onclick = () => closeFind({ toMatch: true });
+for (const b of [$('#findNext'), $('#findPrev')]) b.addEventListener('pointerdown', (e) => e.preventDefault()); // keep the keyboard up
 
 /* ---------------- boot ---------------- */
 (async () => {

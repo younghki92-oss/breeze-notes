@@ -1,6 +1,6 @@
 // Offline shell. Online: always load the latest files (so old and new files never mix), falling back to
 // the cache if the network is slow or gone. Offline: served entirely from the cache.
-const CACHE = 'breeze-v22';
+const CACHE = 'breeze-v23';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png'];
 const NET_TIMEOUT = 2500;
 
