@@ -665,8 +665,18 @@ function lastText(el) {
   return t;
 }
 
+// Korean (and other IME) input is composed in place: 'ㄷ' → '다' → '닥'. Changing the line that holds the
+// composition (its class, its wrapper) makes the browser commit early and the letters come apart ('ㄷㅏ').
+// So while composing, only read the text; anything that touches the DOM waits for compositionend.
+function tidyEditor() {
+  const f = editor.firstChild;
+  if (f && f.nodeType === 3 && getSelection().anchorNode === f) document.execCommand('formatBlock', false, '<div>');
+  markTitle();
+}
+editor.addEventListener('compositionend', () => { if (current) { tidyEditor(); saveEditor(); } });
 editor.addEventListener('input', (e) => {
   if (!current) return;
+  if (e.isComposing) { saveEditor(); return; }
   if (e.inputType === 'insertText' && /\s/.test(e.data || '')) {
     const sel = getSelection();
     linkifyAt(sel.anchorNode, sel.anchorOffset - e.data.length);
@@ -676,9 +686,10 @@ editor.addEventListener('input', (e) => {
     if (t) linkifyAt(t, t.data.length);
   }
   for (const img of editor.querySelectorAll('img:not([data-img])')) if (img.src) adoptImage(img);
-  const f = editor.firstChild;
-  if (f && f.nodeType === 3 && getSelection().anchorNode === f) document.execCommand('formatBlock', false, '<div>');
-  markTitle();
+  tidyEditor();
+  saveEditor();
+});
+function saveEditor() {
   current.body = editor.innerHTML
     .replace(/<img\b[^>]*?data-img="([^"]+)"[^>]*>/g, '<img data-img="$1">')
     .replace(/ class="([^"]*)"/g, (_m, c) => { // the title mark is display-only
@@ -688,7 +699,7 @@ editor.addEventListener('input', (e) => {
   touch(current);
   highlightSoon();
   if (!findBar.hidden) runFind({ keep: true, scroll: false }); // matches follow the text while typing
-});
+}
 // Images can arrive as files, as clipboard items (Android keyboards), or as data: URLs inside pasted HTML.
 const clipFiles = (dt) => {
   const files = [...(dt?.files || [])];
@@ -755,10 +766,14 @@ function setBody(html) {
 // whole body sits inside one wrapper (common in imported Apple Notes) doesn't turn into one big title.
 const BLOCKS = 'div,p,h1,h2,h3,pre,li';
 function markTitle() {
-  let title = null;
+  let title = null, firstEmpty = null;
   for (const el of editor.querySelectorAll(BLOCKS)) {
-    if (!el.querySelector(BLOCKS) && el.textContent.trim()) { title = el; break; }
+    if (el.querySelector(BLOCKS)) continue;
+    if (el.textContent.trim()) { title = el; break; }
+    firstEmpty ??= el;
   }
+  // an empty note: the first line is already the title, so typing the first letter changes nothing around it
+  title ??= firstEmpty;
   // Enter copies the line's class onto the new line, so clear every other mark
   for (const el of editor.querySelectorAll('.title')) if (el !== title) { el.classList.remove('title'); if (!el.className) el.removeAttribute('class'); }
   title?.classList.add('title');
@@ -1211,7 +1226,7 @@ const sync = (() => {
 })();
 
 /* ---------------- settings dialog ---------------- */
-const VERSION = 'v23';
+const VERSION = 'v24';
 $('#appVersion').textContent = `Breeze 노트 ${VERSION}`;
 $('#syncBtn').onclick = () => { $('#authMsg').textContent = ''; sync.ui(); $('#settings').showModal(); };
 $('#loginBtn').onclick = sync.login;
