@@ -56,6 +56,9 @@
       <button data-sort="title">제목</button>
       <hr>
       <button data-groupdates>날짜별로 그룹화</button>
+      <button data-counts>노트 개수 보기</button>
+      <hr>
+      <div class="zoom-row"><span>글자 크기</span><button data-zoom="-1" title="작게 (⌘−)">A−</button><b id="zoomLabel">100%</b><button data-zoom="1" title="크게 (⌘+)">A+</button></div>
     </div>
     <div id="selActions" class="sel-actions" hidden>
       <button data-sel="move">이동</button>
@@ -97,6 +100,7 @@
       <div class="hdr-right tgroup">
         <button id="findBtn" class="icon-btn" title="노트에서 찾기 (⌘F)"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg></button>
         <button id="readBtn" class="icon-btn read-btn" title="읽기 모드 (누르면 켜고 끔)"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5.5C4.5 4 8 4 12 6.5 16 4 19.5 4 22 5.5V19c-2.5-1.5-6-1.5-10 1-4-2.5-7.5-2.5-10-1Z"/><path d="M12 6.5V20"/></svg></button>
+        <button class="icon-btn" data-cmd="more" title="노트 메뉴"><svg viewBox="0 0 24 24" width="21" height="21" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
       </div>
     </header>
     <input type="file" id="photoInput" accept="image/*" multiple hidden>
@@ -119,6 +123,12 @@
       </div>
     </div>
     <div id="noteDate"></div>
+    <div id="lockView" hidden>
+      <svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+      <h3>이 노트는 잠겨 있습니다</h3>
+      <form id="lockForm" class="lock-form"><input id="lockPw" type="password" placeholder="노트 암호" autocomplete="current-password"><button class="pill">열기</button></form>
+      <p id="lockMsg" class="hint"></p>
+    </div>
     <div id="editor" contenteditable="false" spellcheck="false"></div>
     <nav class="ed-bar">
       <div class="grp edit-grp">
@@ -131,6 +141,7 @@
         <button class="icon-btn" data-cmd="file" title="파일"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21 11-8.6 8.6a5 5 0 0 1-7-7l8.5-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.3-2.4l7.9-7.9"/></svg></button>
       </div>
       <div class="grp read-grp">
+        <button class="icon-btn" data-cmd="more" title="노트 메뉴"><svg viewBox="0 0 24 24" width="21" height="21" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
         <button class="icon-btn" data-cmd="del" title="삭제"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
         <button class="icon-btn" data-cmd="pin" title="고정"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3Z"/></svg></button>
       </div>
@@ -191,6 +202,15 @@
   <button data-tm="delete" class="danger-text">태그 삭제…</button>
 </div>
 
+<div id="noteMenu" class="menu tag-menu" hidden>
+  <button data-nm="move">폴더로 이동…</button>
+  <button data-nm="lock">노트 잠그기</button>
+  <button data-nm="relock" hidden>잠긴 노트 모두 다시 잠그기</button>
+  <hr>
+  <button data-nm="md">Markdown으로 내보내기</button>
+  <button data-nm="print">인쇄 / PDF로 저장…</button>
+</div>
+
 <div id="folderMenu" class="menu tag-menu" hidden>
   <button data-fm="edit">스마트 폴더 편집…</button>
   <button data-fm="rename">이름 변경…</button>
@@ -198,6 +218,17 @@
 </div>
 
 <div id="toast" hidden><span id="toastMsg"></span><button id="toastBtn" class="link"></button></div>
+
+<dialog id="lockSheet">
+  <form method="dialog" class="sheet" id="lockSheetForm">
+    <h2 id="lockTitle">노트 암호 만들기</h2>
+    <p id="lockHint" class="hint">잠근 노트는 이 기기에서 암호화된 뒤 저장·동기화됩니다. 모든 잠긴 노트에 같은 암호를 쓰고, 다른 기기에서도 이 암호로 엽니다.<br><b>암호를 잊으면 잠긴 노트를 되살릴 방법이 없습니다.</b> 노트 속 사진·첨부 파일 자체는 암호화되지 않습니다.</p>
+    <label>암호<input id="lockNew" type="password" autocomplete="new-password"></label>
+    <label id="lockAgainRow">암호 확인<input id="lockAgain" type="password" autocomplete="new-password"></label>
+    <p id="lockSheetMsg" class="msg"></p>
+    <div class="row end"><button value="cancel" formnovalidate>취소</button><button id="lockOk" class="primary">확인</button></div>
+  </form>
+</dialog>
 
 <dialog id="moveSheet">
   <form method="dialog" class="sheet">
@@ -258,7 +289,7 @@
     <p id="authMsg" class="msg"></p>
     <hr>
     <div class="row"><button type="button" id="exportBtn">백업 내보내기</button><button type="button" id="importBtn">백업 가져오기</button><input type="file" id="importFile" accept=".json,application/json" hidden></div>
-    <div class="row"><button type="button" id="appleBtn">애플 노트 가져오기</button><input type="file" id="appleDir" webkitdirectory hidden></div>
+    <div class="row"><button type="button" id="appleBtn">애플 노트 가져오기</button><input type="file" id="appleDir" webkitdirectory hidden><button type="button" id="mdBtn">Markdown·텍스트 가져오기</button><input type="file" id="mdFiles" accept=".md,.markdown,.txt,text/markdown,text/plain" multiple hidden></div>
     <div class="row end"><span id="appVersion" class="hint version"></span><button value="close">닫기</button></div>
   </form>
 </dialog>

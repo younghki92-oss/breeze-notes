@@ -527,3 +527,42 @@ html.touch #editor h1::before, html.touch #editor h2::before, html.touch #editor
 .tag-suggest .sg-none { font-size: 13px; color: var(--mute); padding: 6px 10px; }
 .fold-foot .foot-btn { white-space: nowrap; }
 #app:not(.single) .fold-foot #newSmartBtn .lbl { display: none; } /* Mac column: icon only, the name is in the tooltip */
+
+/* ---------- note lock ---------- */
+#lockView { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 10px; padding: 12vh 24px 0; color: var(--mute); text-align: center; }
+#lockView[hidden] { display: none; }
+#lockView svg { color: var(--accent); }
+#lockView h3 { margin: 0; font-size: 17px; color: var(--fg); }
+.lock-form { display: flex; gap: 8px; }
+.lock-form input { font: inherit; font-size: 15px; color: var(--fg); padding: 8px 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--field); outline: none; width: 200px; }
+.lock-form input:focus { border-color: var(--accent); }
+#editorPane.locked #editor, #editorPane.locked .tools .fmt, #editorPane.locked .ed-bar .edit-grp, #editorPane.locked #findBtn, #editorPane.locked #readBtn, #editorPane.locked .undo-float { display: none !important; }
+
+/* ---------- text size (⌘+ / ⌘−) ---------- */
+#editor { font-size: calc(15px * var(--zoom, 1)); }
+#editor pre { font-size: calc(13.5px * var(--zoom, 1)); }
+@media (max-width: 599px) and (pointer: coarse), (max-width: 419px) { #editor { font-size: calc(17px * var(--zoom, 1)); } }
+.zoom-row { display: flex; align-items: center; gap: 4px; padding: 4px 6px 4px calc(12px + 1.4em); font-size: 15px; }
+.zoom-row span { flex: 1; }
+.zoom-row b { min-width: 46px; text-align: center; font-weight: 500; font-size: 13px; color: var(--mute); }
+.menu .zoom-row button { padding: 4px 10px; border: 1px solid var(--line); font-weight: 600; }
+.menu .zoom-row button::before { display: none; }
+.menu button:disabled { opacity: .4; cursor: default; }
+/* 노트 개수 보기 off */
+#app.no-counts #folderList .ct, #app.no-counts #sideCount, #app.no-counts .note-count, #app.no-counts .tag span { display: none; }
+#app.no-counts.single #folderList li.fl .ct { display: inline; font-size: 0; }
+#app.no-counts.single #folderList li.fl .ct::after { font-size: 13px; }
+
+/* ---------- print / PDF: just the note ---------- */
+@media print {
+  @page { margin: 18mm 16mm; }
+  html, body { background: #fff !important; color: #000 !important; height: auto; overflow: visible; }
+  body > *:not(#app), #folders, #sidebar, .ed-head, .ed-bar, .undo-float, #findBar, #empty, #lockView { display: none !important; }
+  #app { display: block !important; height: auto; }
+  #editorPane { display: block !important; border: 0; }
+  #noteDate { color: #666; text-align: left; padding: 0 0 8px; }
+  #editor { overflow: visible !important; height: auto; padding: 0 !important; color: #000; font-size: 11pt; }
+  #editor a { color: #000; }
+  #editor h1::before, #editor h2::before, #editor h3::before, #editor div.title::before { display: none; }
+  #editor img { max-width: 100%; break-inside: avoid; }
+}

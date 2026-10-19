@@ -114,6 +114,7 @@ function textOf(n) {
 }
 function info(n) {
   const lines = textOf(n).split('\n').map((s) => s.trim()).filter(Boolean);
+  if (isLocked(n)) return { title: lines[0] || '잠긴 노트', preview: '🔒 잠김' };
   return { title: lines[0] || (n.body.includes('<img') ? '사진' : '새로운 노트'), preview: lines.slice(1).join(' ').slice(0, 140) || '추가 텍스트 없음' };
 }
 const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -152,7 +153,7 @@ const inTrash = (n) => n.deleted && !isMeta(n) && hasContent(n);
 const live = () => notes.filter((n) => !n.deleted && !isMeta(n));
 
 /* ---------------- folders · smart folders · sort ---------------- */
-// settings (synced in the SETTINGS_ID record): { folders: [{ id, name }], smart: [{ id, name, rules }] }
+// settings (synced in the SETTINGS_ID record): { folders: [{ id, name }], smart: [{ id, name, rules }], lock: { salt, check } }
 let settings = { folders: [], smart: [] };
 const folderById = (id) => settings.folders.find((f) => f.id === id);
 const smartById = (id) => settings.smart.find((f) => f.id === id);
@@ -231,7 +232,7 @@ function matchesSmart(n, r) {
 
 function loadSettings() {
   const m = index.get(SETTINGS_ID);
-  try { const v = m && JSON.parse(m.body); settings = { folders: v?.folders || [], smart: v?.smart || [] }; } catch {}
+  try { const v = m && JSON.parse(m.body); settings = { ...v, folders: v?.folders || [], smart: v?.smart || [] }; } catch {}
 }
 function saveSettings() {
   let m = index.get(SETTINGS_ID);
@@ -654,7 +655,7 @@ function retag(old, nw) {
   const re = new RegExp(`(^|[\\s(>]|&nbsp;)#${escRe}(?![\\p{L}\\p{N}_\\-/])`, 'gu');
   let k = 0;
   for (const n of notes) {
-    if (n.deleted || isMeta(n) || !tagsOf(n).includes(old)) continue;
+    if (n.deleted || isMeta(n) || isLocked(n) || !tagsOf(n).includes(old)) continue;
     n.body = n.body.replace(re, nw ? `$1#${nw}` : '$1');
     touch(n);
     k++;
@@ -887,7 +888,7 @@ function openMoveSheet(ns) {
 function addTag(ns, t) {
   let k = 0;
   for (const n of ns) {
-    if (n.deleted || tagsOf(n).includes(t)) continue;
+    if (n.deleted || isLocked(n) || tagsOf(n).includes(t)) continue;
     n.body += `<div>#${esc(t)}</div>`;
     touch(n);
     k++;
@@ -924,6 +925,7 @@ function markView() {
   const g = $('[data-groupdates]');
   g.classList.toggle('on', groupDates);
   g.disabled = sortBy === 'title';
+  $('[data-counts]').classList.toggle('on', showCounts);
 }
 function setView(v) {
   if (trashMode) setTrash(false);
@@ -941,6 +943,8 @@ $('#viewMenu').onclick = (e) => {
   const b = e.target.closest('button');
   if (!b) return;
   if (b.dataset.view) { $('#viewMenu').hidden = true; setView(b.dataset.view); return; }
+  if (b.dataset.zoom) return setZoom(zoom + 0.1 * b.dataset.zoom);
+  if (b.dataset.counts !== undefined) { setCounts(!showCounts); return markView(); }
   if (b.dataset.sort) sortBy = b.dataset.sort;
   else if (b.dataset.groupdates !== undefined) groupDates = !groupDates;
   else return;
@@ -949,6 +953,7 @@ $('#viewMenu').onclick = (e) => {
   renderList();
 };
 document.addEventListener('click', (e) => { if (!e.target.closest('#viewMenu, #viewBtn')) $('#viewMenu').hidden = true; });
+$('#viewMenu').addEventListener('pointerdown', (e) => { if (e.target.closest('[data-zoom]')) e.preventDefault(); });
 search.addEventListener('input', () => { renderListSoon(); updateSearchSuggest(); });
 const searchSuggest = $('#searchSuggest');
 let ssug = { items: [], idx: 0 };
@@ -1041,7 +1046,7 @@ let readPref = false;
 try { readPref = localStorage.getItem('breeze.reading') === '1'; } catch {}
 let reading = false;
 function setReading(on) {
-  const editable = !!current && !current.deleted;
+  const editable = !!current && !current.deleted && !lockedNow();
   reading = on && editable;
   editor.contentEditable = editable && !reading ? 'true' : 'false';
   pane.classList.toggle('reading', reading);
@@ -1191,14 +1196,16 @@ editor.addEventListener('input', (e) => {
   saveEditor();
 });
 function saveEditor() {
+  if (lockedNow()) return;
   current.editedAt = Date.now();
-  current.body = editor.innerHTML
+  const html = editor.innerHTML
     .replace(/<img\b[^>]*?data-img="([^"]+)"[^>]*>/g, '<img data-img="$1">')
     .replace(/ class="([^"]*)"/g, (_m, c) => { // the title mark is display-only
       const keep = c.split(/\s+/).filter((k) => k && !['title', 'sec-hidden', 'has-hidden'].includes(k));
       return keep.length ? ` class="${keep.join(' ')}"` : '';
     });
-  touch(current);
+  if (isLocked(current)) sealSoon(current, html);
+  else { current.body = html; touch(current); }
   highlightSoon();
   if (!findBar.hidden) runFind({ keep: true, scroll: false }); // matches follow the text while typing
 }
@@ -1268,6 +1275,21 @@ editor.addEventListener('click', (e) => {
 });
 
 function setBody(html) {
+  const locked = !!current && isLocked(current) && html === current.body;
+  if (locked) {
+    const plain = plainFor(current);
+    const shut = plain === null;
+    pane.classList.toggle('locked', shut);
+    $('#lockView').hidden = !shut;
+    if (shut) {
+      editor.innerHTML = '';
+      $('#lockMsg').textContent = '';
+      if (lockKit.open()) decryptInto(current);
+      else if (!touchUI) setTimeout(() => current && lockedNow() && $('#lockPw').focus());
+      return;
+    }
+    html = plain;
+  } else { pane.classList.remove('locked'); $('#lockView').hidden = true; }
   editor.innerHTML = html || (current ? '<div><br></div>' : '');
   markTitle();
   applySections();
@@ -1437,16 +1459,371 @@ const cmds = {
   // ↶ ↷ while typing on a phone or Fold, where there's no ⌘Z
   undo: () => document.execCommand('undo'),
   redo: () => document.execCommand('redo'),
+  more: (btn) => openNoteMenu(btn),
 };
 for (const b of document.querySelectorAll('[data-cmd]')) {
   b.addEventListener('pointerdown', (e) => e.preventDefault()); // keep the caret in the editor
   b.addEventListener('click', () => {
     const c = b.dataset.cmd;
     if (!current && c !== 'new') return;
-    if (!['pin', 'del', 'photo', 'file', 'new'].includes(c) && !editor.contains(getSelection().anchorNode)) { editor.focus(); caretEnd(); }
+    if (lockedNow() && !['del', 'more', 'pin'].includes(c)) return;
+    if (!['pin', 'del', 'photo', 'file', 'new', 'more'].includes(c) && !editor.contains(getSelection().anchorNode)) { editor.focus(); caretEnd(); }
     cmds[c](b);
   });
 }
+
+
+/* ---------------- ⋯ note menu: 이동 · 잠금 · Markdown · 인쇄 ---------------- */
+const noteMenu = $('#noteMenu');
+function openNoteMenu(btn) {
+  if (!noteMenu.hidden) { noteMenu.hidden = true; return; }
+  const locked = isLocked(current);
+  noteMenu.querySelector('[data-nm=lock]').textContent = locked ? '잠금 제거' : '노트 잠그기';
+  noteMenu.querySelector('[data-nm=relock]').hidden = !lockKit.open();
+  for (const k of ['move', 'md', 'print']) noteMenu.querySelector(`[data-nm=${k}]`).disabled = !!current.deleted || (k !== 'move' && lockedNow());
+  noteMenu.querySelector('[data-nm=lock]').disabled = !!current.deleted;
+  noteMenu.hidden = false;
+  const r = btn.getBoundingClientRect(), m = noteMenu.getBoundingClientRect();
+  noteMenu.style.left = `${Math.max(8, Math.min(innerWidth - m.width - 8, r.right - m.width))}px`;
+  noteMenu.style.top = `${r.bottom + m.height + 8 < innerHeight ? r.bottom + 6 : Math.max(8, r.top - m.height - 6)}px`;
+}
+document.addEventListener('pointerdown', (e) => { if (!noteMenu.hidden && !e.target.closest('#noteMenu, [data-cmd=more]')) noteMenu.hidden = true; });
+noteMenu.addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-nm]');
+  if (!b || !current) return;
+  noteMenu.hidden = true;
+  const k = b.dataset.nm;
+  if (k === 'move') openMoveSheet([current]);
+  else if (k === 'md') exportMarkdown(current);
+  else if (k === 'print') printNote();
+  else if (k === 'relock') { lockKit.forget(); toast('잠긴 노트를 다시 잠갔습니다'); }
+  else if (k === 'lock') isLocked(current) ? removeLock(current) : lockNote(current);
+});
+
+/* ---------------- note lock (AES-GCM, key from the note password; never leaves the device) ---------------- */
+// A locked note's body is <div class="locked" data-lock="iv.ciphertext">title</div>: the title stays readable
+// in the list like Apple Notes, everything else is encrypted before it is saved or synced.
+// settings.lock = { salt, check } — check is a known text encrypted with the key, to tell a wrong password.
+const isLocked = (n) => !!n && n.body.startsWith('<div class="locked"');
+const lockKit = (() => {
+  let key = null;
+  const enc = new TextEncoder(), dec = new TextDecoder();
+  const b64 = (u8) => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode(...u8.subarray(i, i + 0x8000)); return btoa(s); };
+  const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  async function derive(pw, salt) {
+    const base = await crypto.subtle.importKey('raw', enc.encode(pw), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey({ name: 'PBKDF2', salt: unb64(salt), iterations: 310000, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  }
+  async function seal(text, k = key) {
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    return `${b64(iv)}.${b64(new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k, enc.encode(text))))}`;
+  }
+  async function unseal(s, k = key) {
+    const [iv, ct] = s.split('.').map(unb64);
+    return dec.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, k, ct));
+  }
+  return {
+    open: () => !!key,
+    async create(pw) {
+      const salt = b64(crypto.getRandomValues(new Uint8Array(16)));
+      const k = await derive(pw, salt);
+      settings.lock = { salt, check: await seal('breeze-lock', k) };
+      saveSettings();
+      key = k;
+    },
+    async unlock(pw) {
+      const k = await derive(pw, settings.lock.salt);
+      try { if ((await unseal(settings.lock.check, k)) !== 'breeze-lock') return false; } catch { return false; }
+      key = k;
+      return true;
+    },
+    seal: (t) => seal(t),
+    unseal: (t) => unseal(t),
+    forget() {
+      key = null;
+      plainCache.clear();
+      if (current && isLocked(current)) { if (document.activeElement === editor) editor.blur(); setBody(current.body); setReading(readPref); }
+    },
+  };
+})();
+// decrypted text of unlocked notes, in memory only (never on the note object, which is written to disk)
+const plainCache = new Map(); // id → { body (the encrypted body it came from), plain }
+const plainFor = (n) => { const c = plainCache.get(n.id); return c && c.body === n.body ? c.plain : null; };
+const lockedNow = () => !!current && isLocked(current) && plainFor(current) === null;
+const lockedBody = (title, payload) => `<div class="locked" data-lock="${payload}">${esc(title)}</div>`;
+async function decryptInto(n) {
+  if (!lockKit.open()) return false;
+  const payload = /data-lock="([^"]+)"/.exec(n.body)?.[1];
+  try { plainCache.set(n.id, { body: n.body, plain: await lockKit.unseal(payload) }); } catch { return false; }
+  if (n === current) { setBody(n.body); setReading(readPref); }
+  return true;
+}
+// edits to an unlocked note: encrypt shortly after typing stops
+const sealT = new Map();
+function sealSoon(n, plain) {
+  plainCache.set(n.id, { body: n.body, plain });
+  clearTimeout(sealT.get(n.id));
+  sealT.set(n.id, setTimeout(async () => {
+    sealT.delete(n.id);
+    const c = plainCache.get(n.id);
+    if (!c || !lockKit.open()) return;
+    tplDoc.innerHTML = c.plain;
+    const title = (tplDoc.content.textContent.split('\n').map((x) => x.trim()).find(Boolean) || '잠긴 노트').slice(0, 120);
+    const body = lockedBody(firstLine(c.plain) || title, await lockKit.seal(c.plain));
+    n.body = body;
+    plainCache.set(n.id, { body, plain: c.plain });
+    touch(n);
+  }, 400));
+}
+const tplDoc = document.createElement('template');
+const firstLine = (html) => info({ id: '_tmp', body: html }).title;
+async function askPassword(mode) { // mode: 'create' | 'unlock' → resolves true when the key is ready
+  const d = $('#lockSheet');
+  $('#lockTitle').textContent = mode === 'create' ? '노트 암호 만들기' : '노트 암호 입력';
+  $('#lockHint').hidden = mode !== 'create';
+  $('#lockAgainRow').hidden = mode !== 'create';
+  $('#lockNew').value = $('#lockAgain').value = '';
+  $('#lockNew').autocomplete = mode === 'create' ? 'new-password' : 'current-password';
+  $('#lockSheetMsg').textContent = '';
+  d.showModal();
+  return new Promise((resolve) => {
+    $('#lockSheetForm').onsubmit = async (e) => {
+      if (e.submitter?.value === 'cancel') return;
+      e.preventDefault();
+      const pw = $('#lockNew').value;
+      if (mode === 'create') {
+        if (pw.length < 4) { $('#lockSheetMsg').textContent = '4자 이상으로 정해 주세요'; return; }
+        if (pw !== $('#lockAgain').value) { $('#lockSheetMsg').textContent = '두 암호가 다릅니다'; return; }
+        await lockKit.create(pw);
+      } else if (!(await lockKit.unlock(pw))) { $('#lockSheetMsg').textContent = '암호가 맞지 않습니다'; return; }
+      d.onclose = null;
+      d.close('ok');
+      resolve(true);
+    };
+    d.onclose = () => resolve(false);
+  });
+}
+async function lockNote(n) {
+  if (!lockKit.open() && !(await askPassword(settings.lock ? 'unlock' : 'create'))) return;
+  if (n === current) saveEditor();
+  const plain = n.body;
+  const body = lockedBody(info(n).title, await lockKit.seal(plain));
+  n.body = body;
+  plainCache.set(n.id, { body, plain });
+  touch(n);
+  flush();
+  if (n === current) setBody(n.body);
+  toast('노트를 잠갔습니다. 잠긴 노트 모두 다시 잠그기나 앱을 다시 열면 잠깁니다');
+}
+async function removeLock(n) {
+  if (!lockKit.open() && !(await askPassword('unlock'))) return;
+  if (plainFor(n) === null && !(await decryptInto(n))) return toast('노트를 열 수 없습니다');
+  clearTimeout(sealT.get(n.id)); sealT.delete(n.id);
+  n.body = plainCache.get(n.id).plain;
+  plainCache.delete(n.id);
+  touch(n);
+  flush();
+  if (n === current) { setBody(n.body); setReading(readPref); }
+  toast('잠금을 제거했습니다');
+}
+$('#lockForm').onsubmit = async (e) => {
+  e.preventDefault();
+  if (!current) return;
+  if (!settings.lock) return ($('#lockMsg').textContent = '이 기기에 아직 암호 정보가 없습니다. 동기화가 끝난 뒤 다시 시도하세요');
+  $('#lockMsg').textContent = '여는 중…';
+  if (!(await lockKit.unlock($('#lockPw').value))) { $('#lockMsg').textContent = '암호가 맞지 않습니다'; $('#lockPw').select(); return; }
+  $('#lockPw').value = '';
+  $('#lockMsg').textContent = '';
+  if (!(await decryptInto(current))) $('#lockMsg').textContent = '이 노트를 풀 수 없습니다 (다른 암호로 잠긴 노트일 수 있습니다)';
+};
+// like Apple Notes: everything locks again after the app has been in the background for a while
+let hiddenAt = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') hiddenAt = Date.now();
+  else if (hiddenAt && Date.now() - hiddenAt > 5 * 60e3 && lockKit.open()) lockKit.forget();
+});
+
+/* ---------------- Markdown export / import, print ---------------- */
+function htmlToMarkdown(html) {
+  tplDoc.innerHTML = html;
+  const out = []; // [kind, text]; list items are joined by one newline, everything else by a blank line
+  const inline = (node) => {
+    let s = '';
+    for (const c of node.childNodes) {
+      if (c.nodeType === 3) { s += c.data.replace(/ /g, ' '); continue; }
+      if (c.nodeType !== 1) continue;
+      const t = c.tagName, inner = () => inline(c);
+      if (t === 'BR') s += '\n';
+      else if (t === 'B' || t === 'STRONG') { const x = inner(); s += x.trim() ? `**${x}**` : x; }
+      else if (t === 'I' || t === 'EM') { const x = inner(); s += x.trim() ? `*${x}*` : x; }
+      else if (t === 'S' || t === 'STRIKE' || t === 'DEL') { const x = inner(); s += x.trim() ? `~~${x}~~` : x; }
+      else if (t === 'IMG') s += '![사진]()';
+      else if (t === 'A' && c.classList.contains('note-link')) s += `[[${c.textContent}]]`;
+      else if (t === 'A' && c.classList.contains('file')) s += `📎 ${c.dataset.name || c.textContent}`;
+      else if (t === 'A') { const x = inner(), h = c.getAttribute('href') || ''; s += !h || x === h ? x : `[${x}](${h})`; }
+      else if (t === 'UL' || t === 'OL') continue; // nested lists are handled by the list walker
+      else s += inner();
+    }
+    return s;
+  };
+  const list = (ul, depth) => {
+    let i = 1;
+    for (const li of ul.children) {
+      if (li.tagName !== 'LI') continue;
+      const mark = ul.tagName === 'OL' ? `${i++}.` : ul.classList.contains('checklist') ? (li.classList.contains('done') ? '- [x]' : '- [ ]') : '-';
+      out.push(['li', `${'  '.repeat(depth)}${mark} ${inline(li).trim()}`]);
+      for (const sub of li.querySelectorAll(':scope > ul, :scope > ol')) list(sub, depth + 1);
+    }
+  };
+  const block = (el) => {
+    for (const c of el.childNodes) {
+      if (c.nodeType === 3) { if (c.data.trim()) out.push(['p', c.data.trim()]); continue; }
+      if (c.nodeType !== 1) continue;
+      const t = c.tagName;
+      if (t === 'UL' || t === 'OL') list(c, 0);
+      else if (/^H[1-3]$/.test(t)) out.push(['h', `${'#'.repeat(+t[1])} ${inline(c).trim()}`]);
+      else if (t === 'PRE') out.push(['p', '```\n' + c.textContent.replace(/\n$/, '') + '\n```']);
+      else if (t === 'BLOCKQUOTE' && !c.getAttribute('style')) out.push(['p', inline(c).split('\n').map((l) => `> ${l}`).join('\n')]);
+      else if (t === 'TABLE') {
+        const rows = [...c.querySelectorAll('tr')].map((tr) => `| ${[...tr.children].map((td) => inline(td).replace(/\n/g, ' ').trim()).join(' | ')} |`);
+        if (rows.length) { const n = (rows[0].match(/ \| /g) || []).length + 1; rows.splice(1, 0, `|${' --- |'.repeat(n)}`); out.push(['p', rows.join('\n')]); }
+      } else if (c.querySelector('div, p, ul, ol, h1, h2, h3, pre, blockquote, table')) block(c);
+      else { const x = inline(c).trim(); out.push(x ? ['p', x] : ['gap', '']); }
+    }
+  };
+  block(tplDoc.content);
+  // the first line is the note's title: make it a heading
+  const first = out.findIndex(([k]) => k !== 'gap');
+  if (first >= 0 && out[first][0] === 'p' && !out[first][1].includes('\n')) out[first] = ['h', `# ${out[first][1].replace(/^\*\*(.*)\*\*$/, '$1')}`];
+  let md = '', prev = null;
+  for (const [k, t] of out) {
+    if (k === 'gap') { prev = 'gap'; continue; }
+    if (prev) md += prev === 'li' && k === 'li' ? '\n' : '\n\n';
+    md += t;
+    prev = k;
+  }
+  return md.trim() + '\n';
+}
+function download(name, text, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+const safeName = (s) => (s.replace(/[\\/:*?"<>|\n\r]+/g, ' ').trim().slice(0, 80) || '노트');
+function exportMarkdown(n) {
+  if (n === current) saveEditor();
+  const html = isLocked(n) ? plainFor(n) : n.body;
+  if (html == null) return;
+  download(`${safeName(info({ id: '_tmp', body: html }).title)}.md`, htmlToMarkdown(html), 'text/markdown;charset=utf-8');
+}
+function printNote() {
+  if (!current) return;
+  setAllSectionsForPrint(true);
+  const before = document.title;
+  document.title = safeName(info({ id: '_tmp', body: editor.innerHTML }).title); // becomes the PDF's file name
+  addEventListener('afterprint', () => { document.title = before; setAllSectionsForPrint(false); }, { once: true });
+  window.print();
+}
+// collapsed sections print open, then fold back
+let printOpened = [];
+function setAllSectionsForPrint(on) {
+  if (on) { printOpened = [...editor.querySelectorAll('.sec-hidden')]; printOpened.forEach((x) => x.classList.remove('sec-hidden')); }
+  else { printOpened.forEach((x) => x.classList.add('sec-hidden')); printOpened = []; }
+}
+
+function inlineMd(s) {
+  s = esc(s);
+  const keep = [];
+  s = s.replace(/`([^`]+)`/g, (_m, c) => { keep.push(`<span style="font-family:ui-monospace,Menlo,monospace">${c}</span>`); return `\u0000${keep.length - 1}\u0000`; });
+  s = s.replace(/\[\[([^\]]+)\]\]/g, (_m, t) => {
+    const n = live().find((x) => info(x).title === decodeHtml(t));
+    return n ? `<a class="note-link" data-note="${n.id}" href="#note-${n.id}">${t}</a>` : t;
+  });
+  s = s.replace(/!\[[^\]]*\]\([^)]*\)/g, '');
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>');
+  s = s.replace(/(^|[^"=>])((?:https?:\/\/|www\.)[^\s<]*[^\s<.,;:!?)\]}])/g, (_m, p, u) => `${p}<a href="${hrefOf(u)}">${u}</a>`);
+  s = s.replace(/\*\*(.+?)\*\*|__(.+?)__/g, (_m, a, b) => `<b>${a ?? b}</b>`);
+  s = s.replace(/(^|[^*\w])\*(?!\s)(.+?)\*(?!\w)|(^|[^_\w])_(?!\s)(.+?)_(?!\w)/g, (_m, p1, a, p2, b) => `${p1 ?? p2}<i>${a ?? b}</i>`);
+  s = s.replace(/~~(.+?)~~/g, '<s>$1</s>');
+  return s.replace(/\u0000(\d+)\u0000/g, (_m, i) => keep[+i]);
+}
+function markdownToHtml(md, plainText) {
+  const lines = md.replace(/\r\n?/g, '\n').split('\n');
+  if (plainText) return lines.map((l) => (l.trim() ? `<div>${linkifyText(l)}</div>` : '<div><br></div>')).join('');
+  let html = '', listKind = null, blank = 0, first = true;
+  const closeList = () => { if (listKind) { html += listKind === 'ol' ? '</ol>' : '</ul>'; listKind = null; } };
+  const openList = (k) => { if (listKind !== k) { closeList(); html += k === 'ol' ? '<ol>' : k === 'check' ? '<ul class="checklist">' : '<ul>'; listKind = k; } };
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (/^\s*```/.test(l)) {
+      closeList();
+      const code = [];
+      while (++i < lines.length && !/^\s*```/.test(lines[i])) code.push(lines[i]);
+      html += `<pre>${esc(code.join('\n'))}</pre>`;
+      first = false; blank = 0;
+      continue;
+    }
+    if (!l.trim()) { blank++; if (blank === 2) { closeList(); html += '<div><br></div>'; } continue; }
+    blank = 0;
+    let m;
+    if ((m = /^(#{1,6})\s+(.*)$/.exec(l))) {
+      closeList();
+      html += first && m[1].length === 1 ? `<div>${inlineMd(m[2])}</div>` : `<h${Math.min(3, m[1].length)}>${inlineMd(m[2])}</h${Math.min(3, m[1].length)}>`;
+    } else if ((m = /^\s*[-*+]\s+\[([ xX])\]\s+(.*)$/.exec(l))) { openList('check'); html += `<li${m[1] === ' ' ? '' : ' class="done"'}>${inlineMd(m[2])}</li>`; }
+    else if ((m = /^\s*[-*+]\s+(.*)$/.exec(l))) { openList('ul'); html += `<li>${inlineMd(m[1])}</li>`; }
+    else if ((m = /^\s*\d+[.)]\s+(.*)$/.exec(l))) { openList('ol'); html += `<li>${inlineMd(m[1])}</li>`; }
+    else if ((m = /^>\s?(.*)$/.exec(l))) { closeList(); html += `<blockquote>${inlineMd(m[1]) || '<br>'}</blockquote>`; }
+    else if (/^\s*([-*_])\s*\1\s*\1[\s\1]*$/.test(l)) { closeList(); html += '<div>———</div>'; }
+    else { closeList(); html += `<div>${inlineMd(l)}</div>`; }
+    first = false;
+  }
+  closeList();
+  return html.replace(/<\/blockquote><blockquote>/g, '<br>');
+}
+async function importMarkdown(files) {
+  const folder = scope.type === 'folder' ? scope.id : null;
+  let last = null, k = 0;
+  for (const f of files) {
+    const text = await f.text();
+    if (!text.trim()) continue;
+    const plain = !/\.(md|markdown)$/i.test(f.name) && f.type !== 'text/markdown';
+    let body = markdownToHtml(text, plain);
+    // a file without its own title line gets the file name as the title
+    const fileTitle = f.name.replace(/\.[^.]+$/, '');
+    if (!plain && !/^#\s/.test(text.trimStart())) body = `<div>${esc(fileTitle)}</div>` + body;
+    const at = f.lastModified || Date.now();
+    last = { id: crypto.randomUUID(), body, pinned: false, deleted: false, folder, createdAt: at, editedAt: at, updatedAt: Date.now(), dirty: true };
+    addNote(last);
+    k++;
+  }
+  if (!last) return toast('가져올 내용이 없습니다');
+  await flush();
+  renderList();
+  if ($('#settings').open) $('#settings').close();
+  open(last);
+  toast(`노트 ${k}개를 가져왔습니다`);
+}
+$('#mdBtn').onclick = () => $('#mdFiles').click();
+$('#mdFiles').onchange = (e) => { importMarkdown([...e.target.files]).catch((err) => toast('가져오기 실패: ' + err.message)); e.target.value = ''; };
+
+/* ---------------- text size (⌘+ / ⌘− / ⌘0) and note counts ---------------- */
+let zoom = 1, showCounts = true;
+try { zoom = +localStorage.getItem('breeze.zoom') || 1; showCounts = localStorage.getItem('breeze.counts') !== '0'; } catch {}
+function setZoom(z) {
+  zoom = Math.round(Math.min(2, Math.max(0.7, z)) * 10) / 10;
+  document.documentElement.style.setProperty('--zoom', zoom);
+  $('#zoomLabel').textContent = `${Math.round(zoom * 100)}%`;
+  try { localStorage.setItem('breeze.zoom', String(zoom)); } catch {}
+}
+function setCounts(on) {
+  showCounts = on;
+  app.classList.toggle('no-counts', !on);
+  try { localStorage.setItem('breeze.counts', on ? '1' : '0'); } catch {}
+}
+setZoom(zoom);
+setCounts(showCounts);
 
 /* ---------------- lists, checklists, indentation (Apple Notes Format menu) ---------------- */
 // Chrome's list/block commands keep the text but rebuild the line and drop the cursor at its start.
@@ -1770,6 +2147,9 @@ addEventListener('keydown', (e) => {
     if (noteOnScreen && !e.altKey) openFind();
     else { if (single()) showList(); search.focus(); }
   }
+  else if (mod && !e.altKey && (e.key === '=' || e.key === '+')) { e.preventDefault(); setZoom(zoom + 0.1); }
+  else if (mod && !e.altKey && e.key === '-') { e.preventDefault(); setZoom(zoom - 0.1); }
+  else if (mod && !e.altKey && e.key === '0') { e.preventDefault(); setZoom(1); }
   else if (mod && e.altKey && e.code === 'KeyS') { e.preventDefault(); setFocusMode(!app.classList.contains('focus')); }
   else if (mod && !e.shiftKey && e.key.toLowerCase() === 'z' && undoStack.length && !isTyping()) { e.preventDefault(); undoDelete(); }
 });
@@ -2018,7 +2398,7 @@ const sync = (() => {
 })();
 
 /* ---------------- settings dialog ---------------- */
-const VERSION = 'v26';
+const VERSION = 'v27';
 $('#appVersion').textContent = `Breeze 노트 ${VERSION}`;
 $('#syncBtn').onclick = () => { $('#authMsg').textContent = ''; sync.ui(); $('#settings').showModal(); };
 $('#loginBtn').onclick = sync.login;
@@ -2307,6 +2687,10 @@ for (const b of [$('#findNext'), $('#findPrev')]) b.addEventListener('pointerdow
     const n = index.get(soloId);
     open(n && !n.deleted ? n : null, { push: false });
     document.title = n ? info(n).title : 'Breeze 노트';
+  } else if (new URLSearchParams(location.search).has('new')) {
+    history.replaceState(null, '', location.pathname);
+    if (single()) renderList();
+    newNote();
   } else if (!single()) open(visible()[0], { push: false });
   else renderList();
   sync.init();
