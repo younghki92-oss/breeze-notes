@@ -1424,7 +1424,7 @@ fileInput.onchange = () => { insertFiles([...fileInput.files]); fileInput.value 
 // Tap the circle to tick a checklist item.
 editor.addEventListener('pointerdown', (e) => {
   const li = e.target.closest?.('ul.checklist > li');
-  if (!li || e.clientX - li.getBoundingClientRect().left > 26) return;
+  if (!li || e.clientX - li.getBoundingClientRect().left > parseFloat(getComputedStyle(li).paddingLeft)) return;
   e.preventDefault();
   li.classList.toggle('done');
   if (autoSortChecked) sortChecklist(li.parentElement);
@@ -2398,7 +2398,7 @@ const sync = (() => {
 })();
 
 /* ---------------- settings dialog ---------------- */
-const VERSION = 'v27';
+const VERSION = 'v28';
 $('#appVersion').textContent = `Breeze 노트 ${VERSION}`;
 $('#syncBtn').onclick = () => { $('#authMsg').textContent = ''; sync.ui(); $('#settings').showModal(); };
 $('#loginBtn').onclick = sync.login;
