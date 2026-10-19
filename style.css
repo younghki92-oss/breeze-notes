@@ -447,3 +447,83 @@ html.touch #editor h1::before, html.touch #editor h2::before, html.touch #editor
 @media (max-width: 599px) and (pointer: coarse), (max-width: 419px) {
   #editor { padding-left: 28px; } /* room for section chevrons, away from the back-swipe edge */
 }
+
+/* ---------- folders (Apple Notes: 폴더 | 목록 | 노트) ---------- */
+#folders { display: none; min-width: 0; min-height: 0; flex-direction: column; background: color-mix(in srgb, var(--side), var(--fg) 3%);
+  border-right: 1px solid var(--line); padding-top: env(safe-area-inset-top); padding-left: env(safe-area-inset-left); }
+#app.folders-open:not(.single):not(.focus):not(.solo) { grid-template-columns: 210px clamp(220px, 28vw, 330px) minmax(0, 1fr); }
+#app.folders-open:not(.single):not(.focus):not(.solo) #folders { display: flex; }
+#app.single.show-folders #folders { display: flex; }
+#app.single.show-folders #sidebar, #app.single.show-folders #editorPane { display: none !important; }
+.fold-head { display: flex; align-items: center; padding: 14px 18px 8px; min-height: 54px; }
+.fold-head h1 { margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -.01em; }
+#app:not(.single) .fold-head h1 { font-size: 13px; font-weight: 600; color: var(--mute); }
+#folderList { list-style: none; margin: 0; padding: 0 8px; flex: 1; overflow-y: auto; }
+#folderList li.fl { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 8px; cursor: pointer; user-select: none; -webkit-user-select: none; }
+#folderList li.fl svg { color: var(--accent); flex: none; }
+#folderList li.fl .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
+#folderList li.fl .ct { color: var(--mute); font-size: 13px; }
+#folderList li.fl:hover { background: var(--hover); }
+#folderList li.fl.on { background: var(--active); }
+#folderList li.fl.drop { outline: 2px solid var(--accent); background: var(--active); }
+#folderList li.fl-sec { font-size: 12px; font-weight: 600; color: var(--mute); padding: 14px 10px 4px; }
+#folderList li.fl-gap { height: 10px; }
+.fold-foot { display: flex; justify-content: space-between; gap: 4px; padding: 8px 8px calc(8px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); }
+.fold-foot .foot-btn { color: var(--accent); font-size: 13px; }
+/* phone: a full screen, roomy rows like the iPhone */
+#app.single #folders { background: var(--side); }
+#app.single .fold-head h1 { font-size: 30px; }
+#app.single #folderList { padding: 0 12px; }
+#app.single #folderList li.fl { padding: 12px 12px; background: color-mix(in srgb, var(--side), var(--fg) 4%); border-radius: 0; border-bottom: 1px solid var(--line); }
+#app.single #folderList li.fl.on { background: color-mix(in srgb, var(--side), var(--fg) 4%); }
+#app.single #folderList li.fl .nm { font-size: 17px; }
+#app.single #folderList li.fl .ct::after { content: " ›"; }
+#app.single .fold-foot .foot-btn { font-size: 15px; }
+/* list header: ‹ 폴더 on the phone, a sidebar toggle on the Mac */
+.folders-btn { flex: none; margin-left: -10px; }
+.folders-btn .fb-single { display: none; align-items: center; font-size: 16px; }
+#app.single .folders-btn .fb-single { display: inline-flex; }
+#app.single .folders-btn .fb-wide, #app.solo .folders-btn { display: none; }
+#app.single .side-head { flex-wrap: wrap; }
+#app.single .side-head .side-title { order: 5; flex-basis: 100%; padding-top: 2px; }
+#app.single .side-head .folders-btn { margin-right: auto; }
+#app.focus:not(.phone) #folders { display: none !important; }
+/* which folder a note is in, when the list mixes folders */
+#list .txt .in-folder { display: block; margin-top: 2px; font-size: 12px; color: var(--mute); }
+#list .txt .in-folder::before { content: "▱ "; }
+
+/* ---------- ⋯ menu extras ---------- */
+.menu-label { font-size: 12px; font-weight: 600; color: var(--mute); padding: 4px 12px 2px calc(12px + 1.4em); }
+.menu button:disabled { opacity: .4; cursor: default; }
+
+/* ---------- move sheet ---------- */
+.move-choices { display: flex; flex-direction: column; max-height: 50vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; }
+.move-choices button { display: flex; align-items: center; gap: 10px; border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--fg);
+  padding: 11px 14px; font-size: 15px; text-align: left; cursor: pointer; }
+.move-choices button:last-child { border-bottom: 0; }
+.move-choices button svg { color: var(--accent); }
+.move-choices button:hover { background: var(--hover); }
+.move-choices button.here { color: var(--mute); }
+.move-choices button.here::after { content: "현재 폴더"; margin-left: auto; font-size: 12px; }
+
+/* ---------- smart folder editor ---------- */
+.sheet.smart { gap: 12px; max-height: calc(100dvh - 40px); overflow-y: auto; }
+.smart-row { display: flex; align-items: center; gap: 12px; font-size: 14px; }
+.smart-row.top { align-items: flex-start; }
+.smart-row > span { flex: none; width: 76px; color: var(--mute); }
+.smart-row > div { flex: 1; min-width: 0; }
+.smart-sub { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; }
+.smart-row > .smart-sub { margin-top: 0; }
+.sheet select { font: inherit; font-size: 14px; color: var(--fg); padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--side); }
+.sheet label.chk { flex-direction: row; align-items: center; gap: 6px; font-size: 14px; color: var(--fg); }
+.sheet label.chk input { width: auto; padding: 0; }
+#smartTags { max-height: 120px; overflow-y: auto; }
+
+/* ---------- note links (>>) and suggestion headers ---------- */
+#editor a.note-link { color: var(--accent); text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px; cursor: pointer; }
+#editor a.note-link::before { content: "↗ "; font-size: .85em; }
+#editor a.note-link.gone { color: var(--mute); text-decoration: line-through; }
+.tag-suggest .sg-head { font-size: 11px; font-weight: 600; color: var(--mute); padding: 4px 10px 2px; }
+.tag-suggest .sg-none { font-size: 13px; color: var(--mute); padding: 6px 10px; }
+.fold-foot .foot-btn { white-space: nowrap; }
+#app:not(.single) .fold-foot #newSmartBtn .lbl { display: none; } /* Mac column: icon only, the name is in the tooltip */

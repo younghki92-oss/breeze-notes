@@ -11,7 +11,7 @@
 ## 1. 동기화 서버 만들기 (5분, 무료)
 
 1. https://supabase.com 에서 가입하고 **New project**를 만듭니다.
-2. 왼쪽 **SQL Editor**에 `supabase.sql` 내용을 전부 붙여넣고 **Run**을 누릅니다. (예전 버전으로 이미 설정했다면 `supabase-photos.sql`만 추가로 실행)
+2. 왼쪽 **SQL Editor**에 `supabase.sql` 내용을 전부 붙여넣고 **Run**을 누릅니다. (예전 버전으로 이미 설정했다면 아직 실행하지 않은 `supabase-photos.sql`, `supabase-folders.sql`만 추가로 실행)
 3. **Project Settings → API**에서 `Project URL`과 `Publishable key`(또는 `anon public` 키)를 복사합니다.
 4. (선택) **Authentication → Sign In / Providers → Email**에서 "Confirm email"을 끄면 가입 즉시 로그인됩니다. 켜 두면 확인 메일의 링크를 한 번 눌러야 합니다.
 
@@ -42,10 +42,11 @@ http://localhost:5173 을 엽니다.
 
 | 파일 | 역할 |
 | --- | --- |
-| `index.html`, `style.css` | 화면 (맥은 2단, 휴대폰은 목록 ↔ 편집 전환) |
+| `index.html`, `style.css` | 화면 (맥은 폴더 · 목록 · 노트 3단, 휴대폰은 폴더 → 목록 → 편집) |
 | `app.js` | 저장, 편집기, 동기화 |
 | `sw.js` | 오프라인 캐시 (새 버전은 다음 실행 때 적용) |
 | `supabase.sql` | 서버 테이블, 보안 규칙, 충돌 처리 |
+| `supabase-folders.sql` | 폴더 기능 추가분 (기존 서버에 한 번 실행) |
 
 ## 애플 노트 가져오기
 

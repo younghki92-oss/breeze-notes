@@ -46,7 +46,14 @@ const idb = (() => {
   };
 })();
 
-// note: { id, body (html), pinned, deleted, updatedAt (ms), dirty (needs upload) }
+// note: { id, body (html), pinned, deleted, folder (folder id or null = 노트), createdAt, editedAt,
+//         updatedAt (ms, the sync version — bumps on any change), dirty (needs upload) }
+// editedAt only moves when the text changes, so moving or pinning a note doesn't reorder the list.
+const edited = (n) => n.editedAt || n.updatedAt;
+const created = (n) => n.createdAt || n.editedAt || n.updatedAt;
+// One hidden record carries folders and smart folders, so they sync like any note.
+const SETTINGS_ID = '00000000-0000-4000-8000-00000b4ee2e0';
+const isMeta = (n) => n.id === SETTINGS_ID;
 let notes = [];
 const index = new Map();
 const unsaved = new Set(); // freshly created, never typed into — not persisted yet
@@ -69,7 +76,7 @@ const bc = 'BroadcastChannel' in window ? new BroadcastChannel('breeze-notes') :
 async function persist(list) {
   if (!list.length) return;
   await idb.putMany(list);
-  bc?.postMessage(list.map(({ id, body, pinned, deleted, updatedAt, dirty }) => ({ id, body, pinned, deleted, updatedAt, dirty })));
+  bc?.postMessage(list.map(({ id, body, pinned, deleted, folder, createdAt, editedAt, updatedAt, dirty }) => ({ id, body, pinned, deleted, folder, createdAt, editedAt, updatedAt, dirty })));
 }
 bc?.addEventListener('message', ({ data }) => {
   let changed = false;
@@ -80,6 +87,7 @@ bc?.addEventListener('message', ({ data }) => {
     Object.assign(n, r);
     unsaved.delete(n.id);
     changed = true;
+    if (isMeta(n)) settingsChanged();
     if (n === current) {
       if (n.deleted && soloId) window.close();
       else if (document.activeElement !== editor) { setBody(n.body); syncPin(); }
@@ -140,11 +148,322 @@ function clearTagSel() { tagSel.inc = []; tagSel.exc = []; tagSel.untagged = fal
 // Deleted notes keep their body for 30 days (the trash); an empty body means permanently deleted.
 const TRASH_DAYS = 30;
 const hasContent = (n) => !!textOf(n).trim() || n.body.includes('<img');
-const inTrash = (n) => n.deleted && hasContent(n);
-let trashMode = false;
+const inTrash = (n) => n.deleted && !isMeta(n) && hasContent(n);
+const live = () => notes.filter((n) => !n.deleted && !isMeta(n));
+
+/* ---------------- folders · smart folders · sort ---------------- */
+// settings (synced in the SETTINGS_ID record): { folders: [{ id, name }], smart: [{ id, name, rules }] }
+let settings = { folders: [], smart: [] };
+const folderById = (id) => settings.folders.find((f) => f.id === id);
+const smartById = (id) => settings.smart.find((f) => f.id === id);
+const folderOf = (n) => (n.folder && folderById(n.folder) ? n.folder : null); // a note in a deleted folder lands in 노트
+// scope: { type: 'all' } · { type: 'folder', id (null = 노트) } · { type: 'smart', id } · { type: 'trash' }
+let scope = { type: 'all' };
+try { scope = JSON.parse(localStorage.getItem('breeze.scope')) || scope; } catch {}
+let trashMode = scope.type === 'trash';
+let sortBy = 'edited', groupDates = true; // ⋯ menu: 편집일 · 생성일 · 제목, 날짜별로 그룹화
+try { sortBy = localStorage.getItem('breeze.sort') || 'edited'; groupDates = localStorage.getItem('breeze.group') !== '0'; } catch {}
+const sortDate = (n) => (sortBy === 'created' ? created(n) : edited(n));
+function scopeName(sc = scope) {
+  if (sc.type === 'trash') return '최근 삭제된 항목';
+  if (sc.type === 'folder') return sc.id ? folderById(sc.id)?.name || '노트' : '노트';
+  if (sc.type === 'smart') return smartById(sc.id)?.name || '스마트 폴더';
+  return '모든 노트';
+}
+function inScope(n, sc = scope) {
+  if (sc.type === 'folder') return folderOf(n) === sc.id;
+  if (sc.type === 'smart') { const f = smartById(sc.id); return !f || matchesSmart(n, f.rules); }
+  return true;
+}
+function byOrder(a, b) {
+  if (sortBy === 'title') return info(a).title.localeCompare(info(b).title, 'ko');
+  return sortDate(b) - sortDate(a);
+}
+// a search looks through every note, like Apple Notes (the trash searches only the trash)
 const visible = () => trashMode
   ? notes.filter(inTrash).sort((a, b) => b.updatedAt - a.updatedAt)
-  : notes.filter((n) => !n.deleted).sort((a, b) => (b.pinned - a.pinned) || (b.updatedAt - a.updatedAt));
+  : live().filter((n) => search.value.trim() || inScope(n)).sort((a, b) => (b.pinned - a.pinned) || byOrder(a, b));
+
+// smart folder rules — every filter left blank is ignored
+const DAY = 864e5;
+function startOfToday() { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); }
+function smartTests(r) {
+  const t = [];
+  if (r.tags?.length || r.untagged) t.push((n) => {
+    const ts = tagsOf(n);
+    if (r.untagged && !ts.length) return true;
+    if (!r.tags?.length) return false;
+    return r.tagMode === 'all' ? r.tags.every((x) => ts.includes(x)) : r.tags.some((x) => ts.includes(x));
+  });
+  if (r.date) {
+    const days = +r.date, at = (n) => (r.dateField === 'created' ? created(n) : edited(n));
+    if (days === 1) t.push((n) => at(n) >= startOfToday());
+    else if (days > 0) t.push((n) => at(n) >= startOfToday() - (days - 1) * DAY);
+    else t.push((n) => at(n) < Date.now() + days * DAY);
+  }
+  if (r.check) t.push((n) => {
+    const items = n.body.match(/<li\b[^>]*>/g) && n.body.includes('checklist') ? checklistItems(n) : [];
+    if (r.check === 'none') return !items.length;
+    if (!items.length) return false;
+    if (r.check === 'done') return items.every(Boolean);
+    if (r.check === 'undone') return items.some((d) => !d);
+    return true;
+  });
+  if (r.att) t.push((n) => {
+    const photo = n.body.includes('<img'), file = n.body.includes('data-file='), link = /<a\b(?![^>]*(?:data-file|note-link))[^>]*href=/.test(n.body);
+    return { any: photo || file || link, photo, file, link, none: !photo && !file && !link }[r.att];
+  });
+  if (r.folder !== undefined && r.folder !== '') t.push((n) => folderOf(n) === (r.folder || null));
+  if (r.pinned) t.push((n) => n.pinned);
+  return t;
+}
+// true/false for each checklist item (done or not)
+const checkDoc = document.createElement('template');
+function checklistItems(n) {
+  checkDoc.innerHTML = n.body;
+  return [...checkDoc.content.querySelectorAll('ul.checklist > li')].filter((li) => li.textContent.trim()).map((li) => li.classList.contains('done'));
+}
+function matchesSmart(n, r) {
+  const t = smartTests(r);
+  if (!t.length) return true;
+  return r.match === 'any' ? t.some((f) => f(n)) : t.every((f) => f(n));
+}
+
+function loadSettings() {
+  const m = index.get(SETTINGS_ID);
+  try { const v = m && JSON.parse(m.body); settings = { folders: v?.folders || [], smart: v?.smart || [] }; } catch {}
+}
+function saveSettings() {
+  let m = index.get(SETTINGS_ID);
+  if (!m) { m = { id: SETTINGS_ID, body: '', pinned: false, deleted: false, updatedAt: 0, dirty: false }; addNote(m); }
+  m.body = JSON.stringify(settings);
+  touch(m);
+  flush();
+  renderFolders();
+}
+// another device or window changed the folders
+function settingsChanged() {
+  loadSettings();
+  if ((scope.type === 'folder' && scope.id && !folderById(scope.id)) || (scope.type === 'smart' && !smartById(scope.id))) setScope({ type: 'folder', id: null });
+  else { renderFolders(); renderListSoon(); }
+}
+const sameScope = (a, b) => a.type === b.type && (a.id ?? null) === (b.id ?? null);
+function setScope(sc, { toList = true } = {}) {
+  if (current) leave(current);
+  current = null;
+  scope = sc;
+  trashMode = sc.type === 'trash';
+  try { localStorage.setItem('breeze.scope', JSON.stringify(sc)); } catch {}
+  clearTagSel();
+  search.value = '';
+  exitSelect();
+  markScope();
+  list.scrollTop = 0;
+  if (single()) { if (toList) hideFolders(); showList(); }
+  else open(visible()[0]);
+  renderFolders();
+}
+function markScope() {
+  $('#sideTitle').textContent = scopeName();
+  $('#backLabel').textContent = scopeName();
+  document.title = soloId ? document.title : scope.type === 'all' ? 'Breeze 노트' : `${scopeName()} — Breeze`;
+}
+
+const FOLDER_ICO = '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>';
+const SMART_ICO = '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M8 10.5h8M9.5 13.5h5M11 16.5h2"/></svg>';
+const ALL_ICO = '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4h10a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="M9 9h6M9 13h6M9 17h3"/></svg>';
+const TRASH_ICO = '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>';
+const folderList = $('#folderList');
+const byName = (a, b) => a.name.localeCompare(b.name, 'ko');
+function renderFolders() {
+  const ns = live(), counts = new Map();
+  for (const n of ns) { const f = folderOf(n); counts.set(f, (counts.get(f) || 0) + 1); }
+  const row = (sc, ico, name, count, extra = '') => {
+    const on = sameScope(sc, scope) ? ' on' : '';
+    return `<li class="fl${on}" data-scope='${esc(JSON.stringify(sc))}'${extra}>${ico}<span class="nm">${esc(name)}</span><span class="ct">${count || ''}</span></li>`;
+  };
+  let html = row({ type: 'all' }, ALL_ICO, '모든 노트', ns.length);
+  html += row({ type: 'folder', id: null }, FOLDER_ICO, '노트', counts.get(null), ' data-drop=""');
+  for (const f of [...settings.folders].sort(byName)) html += row({ type: 'folder', id: f.id }, FOLDER_ICO, f.name, counts.get(f.id), ` data-drop="${f.id}" data-menu="folder"`);
+  if (settings.smart.length) {
+    html += '<li class="fl-sec">스마트 폴더</li>';
+    for (const f of [...settings.smart].sort(byName)) html += row({ type: 'smart', id: f.id }, SMART_ICO, f.name, ns.filter((n) => matchesSmart(n, f.rules)).length, ' data-menu="smart"');
+  }
+  html += '<li class="fl-gap"></li>' + row({ type: 'trash' }, TRASH_ICO, '최근 삭제된 항목', notes.filter(inTrash).length);
+  folderList.innerHTML = html;
+}
+folderList.addEventListener('click', (e) => {
+  const li = e.target.closest('li[data-scope]');
+  if (!li) return;
+  const sc = JSON.parse(li.dataset.scope);
+  if (sameScope(sc, scope) && !single()) return;
+  setScope(sc);
+});
+// right-click / long-press a folder: rename · delete (smart folders: edit too)
+const folderMenu = $('#folderMenu');
+let folderMenuFor = null;
+folderList.addEventListener('contextmenu', (e) => {
+  const li = e.target.closest('li[data-menu]');
+  e.preventDefault();
+  if (!li) return;
+  folderMenuFor = JSON.parse(li.dataset.scope);
+  folderMenu.querySelector('[data-fm=edit]').hidden = folderMenuFor.type !== 'smart';
+  folderMenu.hidden = false;
+  const m = folderMenu.getBoundingClientRect();
+  folderMenu.style.left = `${Math.max(8, Math.min(innerWidth - m.width - 8, e.clientX))}px`;
+  folderMenu.style.top = `${Math.max(8, Math.min(innerHeight - m.height - 8, e.clientY + 4))}px`;
+});
+document.addEventListener('pointerdown', (e) => { if (!folderMenu.hidden && !e.target.closest('#folderMenu')) folderMenu.hidden = true; });
+folderMenu.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-fm]');
+  const sc = folderMenuFor;
+  if (!b || !sc) return;
+  folderMenu.hidden = true;
+  const item = sc.type === 'smart' ? smartById(sc.id) : folderById(sc.id);
+  if (!item) return;
+  if (b.dataset.fm === 'edit') editSmart(item);
+  else if (b.dataset.fm === 'rename') {
+    const nw = (prompt('새 이름', item.name) || '').trim();
+    if (!nw || nw === item.name) return;
+    item.name = nw;
+    saveSettings();
+    markScope();
+  } else if (sc.type === 'smart') {
+    if (!confirm(`'${item.name}' 스마트 폴더를 삭제할까요? 노트는 그대로 남습니다.`)) return;
+    settings.smart = settings.smart.filter((f) => f !== item);
+    saveSettings();
+    if (sameScope(sc, scope)) setScope({ type: 'all' }, { toList: false });
+  } else {
+    const inside = live().filter((n) => n.folder === item.id);
+    if (!confirm(`'${item.name}' 폴더를 삭제할까요?${inside.length ? `\n안에 있는 노트 ${inside.length}개는 최근 삭제된 항목으로 이동합니다.` : ''}`)) return;
+    inside.forEach((n) => { n.deleted = true; touch(n); });
+    settings.folders = settings.folders.filter((f) => f !== item);
+    saveSettings();
+    if (sameScope(sc, scope)) setScope({ type: 'folder', id: null }, { toList: false });
+    else renderList();
+    if (inside.length) toast(`노트 ${inside.length}개를 최근 삭제된 항목으로 옮겼습니다`);
+  }
+});
+// smart folder editor: the count below updates as rules change
+let smartEditing = null, smartPick = [];
+function smartRulesFromForm() {
+  return {
+    match: $('#smartMatch').value, tags: [...smartPick], tagMode: $('#smartTagMode').value, untagged: $('#smartUntagged').checked,
+    dateField: $('#smartDateField').value, date: $('#smartDate').value, check: $('#smartCheck').value, att: $('#smartAtt').value,
+    folder: $('#smartFolder').value === '*' ? '' : $('#smartFolder').value === '' ? null : $('#smartFolder').value, pinned: $('#smartPinned').checked,
+  };
+}
+function smartCount() {
+  const r = smartRulesFromForm();
+  $('#smartCount').textContent = smartTests(r).length ? `지금 ${live().filter((n) => matchesSmart(n, r)).length}개 노트가 해당됩니다` : '조건을 하나 이상 고르세요';
+}
+function renderSmartTags() {
+  const tags = [...new Set([...live().flatMap(tagsOf), ...smartPick])].sort((a, b) => a.localeCompare(b, 'ko'));
+  $('#smartTags').innerHTML = tags.map((t) => `<button type="button" class="tag${smartPick.includes(t) ? ' on' : ''}" data-st="${esc(t)}">#${esc(t)}</button>`).join('') || '<span class="hint">아직 태그가 없습니다</span>';
+}
+function editSmart(item, preset) {
+  smartEditing = item;
+  const r = item?.rules || preset || {};
+  smartPick = [...(r.tags || [])];
+  $('#smartTitle').textContent = item ? '스마트 폴더 편집' : '새로운 스마트 폴더';
+  $('#smartName').value = item?.name || '';
+  $('#smartMatch').value = r.match || 'all';
+  $('#smartTagMode').value = r.tagMode || 'any';
+  $('#smartUntagged').checked = !!r.untagged;
+  $('#smartDateField').value = r.dateField || 'edited';
+  $('#smartDate').value = r.date || '';
+  $('#smartCheck').value = r.check || '';
+  $('#smartAtt').value = r.att || '';
+  $('#smartFolder').innerHTML = '<option value="*">모든 폴더</option><option value="">노트</option>' + [...settings.folders].sort(byName).map((f) => `<option value="${f.id}">${esc(f.name)}</option>`).join('');
+  $('#smartFolder').value = r.folder === undefined || r.folder === '' ? '*' : r.folder || '';
+  $('#smartPinned').checked = !!r.pinned;
+  renderSmartTags();
+  smartCount();
+  const d = $('#smartSheet');
+  d.returnValue = '';
+  d.showModal();
+  if (!item) $('#smartName').focus();
+}
+$('#smartTags').onclick = (e) => {
+  const b = e.target.closest('[data-st]');
+  if (!b) return;
+  const t = b.dataset.st;
+  smartPick = smartPick.includes(t) ? smartPick.filter((x) => x !== t) : [...smartPick, t];
+  b.classList.toggle('on', smartPick.includes(t));
+  smartCount();
+};
+$('#smartSheet').addEventListener('change', smartCount);
+$('#smartSheet').addEventListener('close', () => {
+  const d = $('#smartSheet');
+  if (d.returnValue !== 'ok') return;
+  const rules = smartRulesFromForm();
+  if (!smartTests(rules).length) return toast('조건이 없어 스마트 폴더를 만들지 않았습니다');
+  const name = $('#smartName').value.trim() || '스마트 폴더';
+  if (smartEditing) Object.assign(smartEditing, { name, rules });
+  else { smartEditing = { id: crypto.randomUUID(), name, rules }; settings.smart.push(smartEditing); }
+  saveSettings();
+  setScope({ type: 'smart', id: smartEditing.id });
+});
+function newFolder() {
+  const name = (prompt('새로운 폴더 이름', '새로운 폴더') || '').trim();
+  if (!name) return null;
+  const f = { id: crypto.randomUUID(), name };
+  settings.folders.push(f);
+  saveSettings();
+  return f;
+}
+$('#newFolderBtn').onclick = () => { const f = newFolder(); if (f) setScope({ type: 'folder', id: f.id }); };
+$('#newSmartBtn').onclick = () => editSmart(null);
+// drag notes from the list onto a folder to move them
+folderList.addEventListener('dragover', (e) => {
+  const li = e.target.closest('li[data-drop]');
+  if (!li || !e.dataTransfer.types.includes('text/x-breeze-note')) return;
+  e.preventDefault();
+  for (const x of folderList.querySelectorAll('.drop')) x.classList.remove('drop');
+  li.classList.add('drop');
+});
+folderList.addEventListener('dragleave', (e) => e.target.closest?.('li[data-drop]')?.classList.remove('drop'));
+folderList.addEventListener('drop', (e) => {
+  const li = e.target.closest('li[data-drop]');
+  if (!li) return;
+  e.preventDefault();
+  li.classList.remove('drop');
+  const ids = e.dataTransfer.getData('text/x-breeze-note').split(',');
+  moveNotes(ids.map((id) => index.get(id)).filter(Boolean), li.dataset.drop || null);
+});
+function moveNotes(ns, folder) {
+  ns = ns.filter((n) => folderOf(n) !== folder);
+  if (!ns.length) return;
+  ns.forEach((n) => { n.folder = folder; touch(n); });
+  flush();
+  if (current && ns.includes(current) && !inScope(current) && !single()) open(visible()[0]);
+  renderList();
+  renderFolders();
+  toast(`${ns.length}개를 '${folder ? folderById(folder).name : '노트'}' 폴더로 옮겼습니다`);
+}
+
+// phone / gallery: the folder list is its own screen (‹ 폴더). Mac: a column that can be hidden.
+let foldersOpen = innerWidth >= 1000;
+try { const v = localStorage.getItem('breeze.folders'); if (v !== null) foldersOpen = v === '1'; } catch {}
+app.classList.toggle('folders-open', foldersOpen);
+function showFolders() {
+  if (current) leave(current);
+  app.classList.add('show-folders');
+  renderFolders();
+  if (touchUI) history.pushState({ folders: 1 }, '');
+}
+function hideFolders() {
+  if (!app.classList.contains('show-folders')) return;
+  app.classList.remove('show-folders');
+  if (history.state?.folders) history.back();
+}
+$('#foldersBtn').onclick = () => {
+  if (single()) return showFolders();
+  foldersOpen = !app.classList.contains('folders-open');
+  app.classList.toggle('folders-open', foldersOpen);
+  try { localStorage.setItem('breeze.folders', foldersOpen ? '1' : '0'); } catch {}
+  renderFolders();
+};
 // what the list shows, in order — also drives arrow-key navigation
 function listed(all = visible()) {
   const q = search.value.trim().toLowerCase();
@@ -166,16 +485,16 @@ function renderList() {
     const { title } = info(n);
     const thumb = /<img data-img="([^"]+)"/.exec(n.body);
     const cover = thumb ? `<img class="thumb" data-img="${thumb[1]}" alt="">` : `<div class="snip">${esc(textOf(n).trim().slice(0, 240))}</div>`;
-    return `<li data-id="${n.id}" class="card${n === current ? ' active' : ''}${sel(n)}"><div class="cv">${cover}</div><div class="t">${n.pinned ? PIN : ''}${esc(title)}</div><div class="d">${fmt(n.updatedAt)}</div></li>`;
+    return `<li data-id="${n.id}" class="card${n === current ? ' active' : ''}${sel(n)}"><div class="cv">${cover}</div><div class="t">${n.pinned ? PIN : ''}${esc(title)}</div><div class="d">${fmt(sortDate(n))}</div></li>`;
   };
   const row = mode === 'gallery' ? card : (n) => {
     const { title, preview } = info(n);
-    const when = trashMode ? `${Math.max(1, Math.ceil(TRASH_DAYS - (Date.now() - n.updatedAt) / 864e5))}일 남음` : fmt(n.updatedAt);
+    const when = trashMode ? `${Math.max(1, Math.ceil(TRASH_DAYS - (Date.now() - n.updatedAt) / 864e5))}일 남음` : fmt(sortDate(n));
+    const where = scope.type !== 'folder' && !trashMode && folderOf(n) ? `<span class="in-folder">${esc(folderById(n.folder).name)}</span>` : '';
     const thumb = /<img data-img="([^"]+)"/.exec(n.body);
-    return `<li data-id="${n.id}" class="${n === current ? 'active' : ''}${sel(n)}"${touchUI ? '' : ' draggable="true"'}><div class="sw"><div class="txt"><div class="t">${n.pinned && !trashMode ? PIN : ''}${esc(title)}</div><div class="p"><time>${when}</time>${esc(preview)}</div></div>${thumb ? `<img class="thumb" data-img="${thumb[1]}" alt="">` : ''}</div></li>`;
+    return `<li data-id="${n.id}" class="${n === current ? 'active' : ''}${sel(n)}"${touchUI ? '' : ' draggable="true"'}><div class="sw"><div class="txt"><div class="t">${n.pinned && !trashMode ? PIN : ''}${esc(title)}</div><div class="p"><time>${when}</time>${esc(preview)}</div>${where}</div>${thumb ? `<img class="thumb" data-img="${thumb[1]}" alt="">` : ''}</div></li>`;
   };
   const trashCount = notes.filter(inTrash).length;
-  $('#trashCount').textContent = trashCount || '';
   $('#emptyTrashBtn').hidden = !trashMode || !trashCount;
   $('#composeBtn').hidden = trashMode;
   $('#noteCount').textContent = trashMode ? '' : `노트 ${all.length}개`;
@@ -186,12 +505,13 @@ function renderList() {
   if (pinned.length) html += '<li class="sec">고정됨</li>' + pinned.map(row).join('');
   let group = '';
   for (const n of rest) {
-    const g = trashMode ? '' : groupOf(n.updatedAt);
-    if (g !== group) { html += `<li class="sec">${g}</li>`; group = g; }
+    const g = trashMode || !groupDates || sortBy === 'title' ? (pinned.length && !trashMode ? '노트' : '') : groupOf(sortDate(n));
+    if (g !== group) { if (g) html += `<li class="sec">${g}</li>`; group = g; }
     html += row(n);
   }
-  list.innerHTML = html || `<li class="none">${q ? '검색 결과 없음' : trashMode ? '휴지통이 비어 있습니다' : '노트가 없습니다'}</li>`;
+  list.innerHTML = html || `<li class="none">${q ? '검색 결과 없음' : trashMode ? '최근 삭제된 항목이 없습니다' : '노트가 없습니다'}</li>`;
   loadThumbs();
+  if (app.classList.contains('folders-open') || app.classList.contains('show-folders')) renderFolders();
 }
 function loadThumbs() {
   for (const img of list.querySelectorAll('img.thumb')) {
@@ -218,7 +538,7 @@ function attachmentsOf(list) {
         continue;
       }
       const href = /href="([^"]+)"/.exec(attrs);
-      if (href) out.links.push({ n, url: decodeHtml(href[1]), text: label });
+      if (href && !attrs.includes('note-link')) out.links.push({ n, url: decodeHtml(href[1]), text: label });
     }
   }
   return out;
@@ -272,7 +592,8 @@ function renderTags(all) {
     (tagSel.inc.length > 1 ? `<button class="tag mode" data-tagmode title="여러 태그를 고를 때의 조건">${tagSel.mode === 'all' ? '모두 포함' : '하나라도'} ▾</button>` : '') +
     tags.map(chip).join('') +
     `<button class="tag untagged${tagSel.untagged ? ' on' : ''}" data-untagged>태그 없음</button>` +
-    (tagFilterOn() ? '<button class="tag clear" data-tagclear>해제</button>' : '');
+    (tagFilterOn() ? '<button class="tag clear" data-tagclear>해제</button>' : '') +
+    (tagSel.inc.length || tagSel.untagged ? '<button class="tag clear" data-tagsave title="지금 고른 태그로 스마트 폴더 만들기">스마트 폴더로</button>' : '');
 }
 tagBar.addEventListener('click', (e) => {
   const b = e.target.closest('button');
@@ -280,6 +601,7 @@ tagBar.addEventListener('click', (e) => {
   if (b.dataset.tagmode !== undefined) tagSel.mode = tagSel.mode === 'all' ? 'any' : 'all';
   else if (b.dataset.untagged !== undefined) { tagSel.untagged = !tagSel.untagged; if (tagSel.untagged) tagSel.inc = []; }
   else if (b.dataset.tagclear !== undefined) clearTagSel();
+  else if (b.dataset.tagsave !== undefined) return editSmart(null, { tags: [...tagSel.inc], tagMode: tagSel.mode, untagged: tagSel.untagged });
   else if (b.dataset.tag) {
     const t = b.dataset.tag;
     if (e.altKey) return toggleTagExclude(t); // ⌥-click: exclude
@@ -332,7 +654,7 @@ function retag(old, nw) {
   const re = new RegExp(`(^|[\\s(>]|&nbsp;)#${escRe}(?![\\p{L}\\p{N}_\\-/])`, 'gu');
   let k = 0;
   for (const n of notes) {
-    if (n.deleted || !tagsOf(n).includes(old)) continue;
+    if (n.deleted || isMeta(n) || !tagsOf(n).includes(old)) continue;
     n.body = n.body.replace(re, nw ? `$1#${nw}` : '$1');
     touch(n);
     k++;
@@ -542,8 +864,25 @@ $('#selActions').onclick = async (e) => {
       if (navigator.share) await navigator.share({ title: ns.length === 1 ? info(ns[0]).title : `노트 ${ns.length}개`, text });
       else { await navigator.clipboard.writeText(text); toast('클립보드에 복사했습니다'); }
     } catch {}
-  } else openTagSheet(ns);
+  } else openMoveSheet(ns);
 };
+function openMoveSheet(ns) {
+  const d = $('#moveSheet');
+  const here = new Set(ns.map(folderOf));
+  const opts = [{ id: null, name: '노트' }, ...[...settings.folders].sort(byName)];
+  $('#moveTitle').textContent = `${ns.length}개 노트를 폴더로 이동`;
+  $('#moveChoices').innerHTML = opts.map((f) => `<button type="button" data-move="${f.id || ''}"${here.size === 1 && here.has(f.id) ? ' class="here"' : ''}>${FOLDER_ICO}<span>${esc(f.name)}</span></button>`).join('');
+  $('#moveChoices').onclick = (e) => {
+    const b = e.target.closest('[data-move]');
+    if (!b) return;
+    d.close();
+    moveNotes(ns, b.dataset.move || null);
+    exitSelect();
+  };
+  $('#moveNewFolder').onclick = () => { const f = newFolder(); if (!f) return; d.close(); moveNotes(ns, f.id); exitSelect(); };
+  $('#moveToTag').onclick = () => { d.close(); openTagSheet(ns); };
+  d.showModal();
+}
 // add a tag line to notes that don't have the tag yet; returns how many changed
 function addTag(ns, t) {
   let k = 0;
@@ -560,7 +899,7 @@ function addTag(ns, t) {
 }
 // 이동: Breeze uses tags as folders, so moving = adding a tag line to each note.
 function openTagSheet(ns) {
-  const tags = [...new Set(notes.filter((n) => !n.deleted).flatMap(tagsOf))].sort((a, b) => a.localeCompare(b, 'ko'));
+  const tags = [...new Set(live().flatMap(tagsOf))].sort((a, b) => a.localeCompare(b, 'ko'));
   $('#tagChoices').innerHTML = tags.map((t) => `<button type="button" class="tag" data-pick="${esc(t)}">#${esc(t)}</button>`).join('') || '<p class="hint">아직 태그가 없습니다. 아래에 새로 입력하세요.</p>';
   $('#newTag').value = '';
   const d = $('#tagSheet');
@@ -571,7 +910,7 @@ function openTagSheet(ns) {
     if (!/^[\p{L}_]/u.test(t)) { toast('태그는 글자로 시작해야 합니다'); return; }
     const k = addTag(ns, t);
     exitSelect();
-    toast(`${k}개 노트를 #${t}(으)로 옮겼습니다`);
+    toast(`${k}개 노트에 #${t} 태그를 붙였습니다`);
   };
   d.showModal();
 }
@@ -579,7 +918,13 @@ $('#tagChoices').onclick = (e) => { const b = e.target.closest('[data-pick]'); i
 $('#tagCancel').onclick = () => $('#tagSheet').close('cancel');
 
 /* ---------------- ⋯ view menu ---------------- */
-function markView() { for (const b of document.querySelectorAll('[data-view]')) b.classList.toggle('on', b.dataset.view === view); }
+function markView() {
+  for (const b of document.querySelectorAll('[data-view]')) b.classList.toggle('on', b.dataset.view === view);
+  for (const b of document.querySelectorAll('[data-sort]')) b.classList.toggle('on', b.dataset.sort === sortBy);
+  const g = $('[data-groupdates]');
+  g.classList.toggle('on', groupDates);
+  g.disabled = sortBy === 'title';
+}
 function setView(v) {
   if (trashMode) setTrash(false);
   exitSelect();
@@ -592,9 +937,58 @@ function setView(v) {
   renderList();
 }
 $('#viewBtn').onclick = (e) => { e.stopPropagation(); markView(); $('#viewMenu').hidden = !$('#viewMenu').hidden; };
-$('#viewMenu').onclick = (e) => { const b = e.target.closest('[data-view]'); if (!b) return; $('#viewMenu').hidden = true; setView(b.dataset.view); };
+$('#viewMenu').onclick = (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.view) { $('#viewMenu').hidden = true; setView(b.dataset.view); return; }
+  if (b.dataset.sort) sortBy = b.dataset.sort;
+  else if (b.dataset.groupdates !== undefined) groupDates = !groupDates;
+  else return;
+  try { localStorage.setItem('breeze.sort', sortBy); localStorage.setItem('breeze.group', groupDates ? '1' : '0'); } catch {}
+  markView();
+  renderList();
+};
 document.addEventListener('click', (e) => { if (!e.target.closest('#viewMenu, #viewBtn')) $('#viewMenu').hidden = true; });
-search.addEventListener('input', renderListSoon);
+search.addEventListener('input', () => { renderListSoon(); updateSearchSuggest(); });
+const searchSuggest = $('#searchSuggest');
+let ssug = { items: [], idx: 0 };
+function updateSearchSuggest() {
+  const m = /(?:^|\s)#([\p{L}\p{N}_\-/]*)$/u.exec(search.value);
+  if (!m || trashMode) { searchSuggest.hidden = true; ssug.items = []; return; }
+  const p = m[1].toLowerCase();
+  const all = [...tagCounts].filter(([t]) => !tagSel.inc.includes(t)).sort((a, b) => b[1] - a[1]);
+  const items = [...all.filter(([t]) => t.toLowerCase().startsWith(p)), ...all.filter(([t]) => !t.toLowerCase().startsWith(p) && t.toLowerCase().includes(p))].slice(0, 8);
+  ssug = { items, idx: 0 };
+  searchSuggest.hidden = !items.length;
+  searchSuggest.innerHTML = '<div class="sg-head">태그로 거르기</div>' + items.map(([t, c], i) => `<button data-i="${i}" class="${i === 0 ? 'on' : ''}">#${esc(t)}<span>${c}</span></button>`).join('');
+  const r = search.getBoundingClientRect();
+  searchSuggest.style.left = `${r.left}px`;
+  searchSuggest.style.top = `${r.bottom + 4}px`;
+  searchSuggest.style.minWidth = `${Math.min(r.width, 280)}px`;
+}
+function pickSearchTag(i) {
+  const t = ssug.items[i]?.[0];
+  if (!t) return;
+  search.value = search.value.replace(/(?:^|\s)#[\p{L}\p{N}_\-/]*$/u, '').trim();
+  searchSuggest.hidden = true;
+  tagSel.exc = tagSel.exc.filter((x) => x !== t);
+  if (!tagSel.inc.includes(t)) tagSel.inc.push(t);
+  tagSel.untagged = false;
+  list.scrollTop = 0;
+  renderList();
+}
+search.addEventListener('keydown', (e) => {
+  if (searchSuggest.hidden || e.isComposing) return;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault(); e.stopImmediatePropagation();
+    ssug.idx = (ssug.idx + (e.key === 'ArrowDown' ? 1 : -1) + ssug.items.length) % ssug.items.length;
+    searchSuggest.querySelectorAll('button').forEach((b, i) => b.classList.toggle('on', i === ssug.idx));
+  } else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); e.stopImmediatePropagation(); pickSearchTag(ssug.idx); }
+  else if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); searchSuggest.hidden = true; }
+}, true);
+search.addEventListener('blur', () => setTimeout(() => { searchSuggest.hidden = true; }, 150));
+searchSuggest.addEventListener('pointerdown', (e) => e.preventDefault());
+searchSuggest.addEventListener('click', (e) => { const b = e.target.closest('[data-i]'); if (b) pickSearchTag(+b.dataset.i); });
 
 // Apple Notes-style keyboard: with the list focused, ↑/↓ move between notes, ⌫ trashes, Enter/→ edits.
 list.tabIndex = 0;
@@ -630,7 +1024,7 @@ function open(n, { focus = false, push = true } = {}) {
   if (n && q && !soloId) openFind(q, { focus: false });
   else if (!findBar.hidden) n && !n.deleted ? runFind() : closeFind();
   syncPin();
-  $('#noteDate').textContent = n ? new Date(n.updatedAt).toLocaleString('ko-KR', { dateStyle: 'long', timeStyle: 'short' }) : '';
+  $('#noteDate').textContent = n ? new Date(edited(n)).toLocaleString('ko-KR', { dateStyle: 'long', timeStyle: 'short' }) : '';
   if (n && single() && !app.classList.contains('show-editor')) {
     app.classList.replace('show-list', 'show-editor');
     if (push) history.pushState({ note: n.id }, '');
@@ -686,25 +1080,14 @@ function caretEnd() {
 }
 function newNote() {
   if (trashMode) setTrash(false);
-  const n = { id: crypto.randomUUID(), body: '', pinned: false, deleted: false, updatedAt: Date.now(), dirty: false };
+  const now = Date.now();
+  const n = { id: crypto.randomUUID(), body: '', pinned: false, deleted: false, folder: scope.type === 'folder' ? scope.id : (scope.type === 'smart' && smartById(scope.id)?.rules.folder) || null, createdAt: now, editedAt: now, updatedAt: now, dirty: false };
   addNote(n); unsaved.add(n.id);
   search.value = '';
   open(n, { focus: true });
 }
 
-function setTrash(on) {
-  if (current) leave(current);
-  current = null;
-  trashMode = on;
-  clearTagSel();
-  search.value = '';
-  $('#sideTitle').textContent = on ? '휴지통' : '노트';
-  $('#trashLabel').textContent = on ? '‹ 모든 노트' : '휴지통';
-  $('#trashCount').hidden = on;
-  if (single()) showList();
-  else open(visible()[0]);
-}
-$('#trashBtn').onclick = () => setTrash(!trashMode);
+function setTrash(on) { setScope(on ? { type: 'trash' } : { type: 'all' }); }
 $('#emptyTrashBtn').onclick = () => {
   const all = notes.filter(inTrash);
   if (!all.length || !confirm(`휴지통의 노트 ${all.length}개를 영구 삭제할까요? 되돌릴 수 없습니다.`)) return;
@@ -730,7 +1113,8 @@ if (window.visualViewport) {
 $('#emptyNew').onclick = newNote;
 $('#backBtn').onclick = () => (history.state?.note ? history.back() : showList());
 addEventListener('popstate', () => { // Android back button
-  if (selecting) exitSelect(true);
+  if (app.classList.contains('show-folders')) app.classList.remove('show-folders');
+  else if (selecting) exitSelect(true);
   else if (app.classList.contains('show-editor')) showList();
 });
 function applyLayout() {
@@ -807,6 +1191,7 @@ editor.addEventListener('input', (e) => {
   saveEditor();
 });
 function saveEditor() {
+  current.editedAt = Date.now();
   current.body = editor.innerHTML
     .replace(/<img\b[^>]*?data-img="([^"]+)"[^>]*>/g, '<img data-img="$1">')
     .replace(/ class="([^"]*)"/g, (_m, c) => { // the title mark is display-only
@@ -869,6 +1254,15 @@ editor.addEventListener('drop', (e) => {
 editor.addEventListener('click', (e) => {
   const chip = e.target.closest('a.file');
   if (chip) { e.preventDefault(); openFile(chip.dataset.file, chip.dataset.name); return; }
+  const nl = e.target.closest('a.note-link');
+  if (nl) {
+    e.preventDefault();
+    const n = index.get(nl.dataset.note);
+    if (!n || n.deleted) return toast('링크된 노트가 삭제되었습니다');
+    if (!inScope(n) && !search.value.trim()) setScope({ type: 'folder', id: folderOf(n) }, { toList: false });
+    open(n);
+    return;
+  }
   const link = e.target.closest('a[href]');
   if (link) { e.preventDefault(); window.open(link.href, '_blank', 'noopener'); }
 });
@@ -879,6 +1273,7 @@ function setBody(html) {
   applySections();
   hydrate();
   highlightTags();
+  refreshNoteLinks();
 }
 // The title is the first line that has text — the innermost block holding it, so a note whose
 // whole body sits inside one wrapper (common in imported Apple Notes) doesn't turn into one big title.
@@ -1184,27 +1579,43 @@ let sugg = { items: [], idx: 0 };
 let composing = false;
 editor.addEventListener('compositionstart', () => { composing = true; });
 editor.addEventListener('compositionend', () => { composing = false; setTimeout(updateTagSuggest); });
-// the "#partial" right before the caret, if any
+// the "#partial" or ">>partial" right before the caret, if any
 function tagContext() {
   const sel = getSelection();
   const node = sel.anchorNode;
-  if (!sel.isCollapsed || !node || node.nodeType !== 3 || !editor.contains(node)) return null;
+  if (!sel.isCollapsed || !node || node.nodeType !== 3 || !editor.contains(node) || node.parentElement.closest('a')) return null;
   const before = node.data.slice(0, sel.anchorOffset);
+  const l = /(?:>>|》)([^>》\n]{0,40})$/u.exec(before); // >> links to another note (Apple Notes does the same)
+  if (l) return { node, start: l.index, end: sel.anchorOffset, partial: l[1], kind: 'link' };
   const m = /(?:^|[\s(])#([\p{L}\p{N}_\-/]*)$/u.exec(before);
   if (!m) return null;
   const start = m.index + m[0].indexOf('#');
-  return { node, start, end: sel.anchorOffset, partial: m[1] };
+  return { node, start, end: sel.anchorOffset, partial: m[1], kind: 'tag' };
+}
+function noteMatches(q, except) {
+  q = q.trim().toLowerCase();
+  const ns = live().filter((n) => n !== except && hasContent(n)).sort((a, b) => edited(b) - edited(a));
+  if (!q) return ns.slice(0, 8);
+  const t = (n) => info(n).title.toLowerCase();
+  return [...ns.filter((n) => t(n).startsWith(q)), ...ns.filter((n) => !t(n).startsWith(q) && t(n).includes(q))].slice(0, 8);
 }
 function updateTagSuggest() {
   const ctx = current && !reading ? tagContext() : null;
   if (!ctx) return hideTagSuggest();
   const p = ctx.partial.toLowerCase();
-  const all = [...tagCounts].sort((a, b) => b[1] - a[1]);
-  const items = [...all.filter(([t]) => t.toLowerCase().startsWith(p)), ...all.filter(([t]) => !t.toLowerCase().startsWith(p) && t.toLowerCase().includes(p))]
-    .filter(([t]) => t !== ctx.partial).slice(0, 8);
-  if (!items.length) return hideTagSuggest();
-  sugg = { items, idx: 0 };
-  tagSuggest.innerHTML = items.map(([t, c], i) => `<button data-i="${i}" class="${i === 0 ? 'on' : ''}">#${esc(t)}<span>${c}</span></button>`).join('');
+  let items;
+  if (ctx.kind === 'link') {
+    items = noteMatches(ctx.partial, current);
+    sugg = { items, idx: 0, kind: 'link' };
+    tagSuggest.innerHTML = '<div class="sg-head">노트 링크</div>' + (items.map((n, i) => `<button data-i="${i}" class="${i === 0 ? 'on' : ''}">${esc(info(n).title)}<span>${fmt(edited(n))}</span></button>`).join('') || '<div class="sg-none">일치하는 노트가 없습니다</div>');
+  } else {
+    const all = [...tagCounts].sort((a, b) => b[1] - a[1]);
+    items = [...all.filter(([t]) => t.toLowerCase().startsWith(p)), ...all.filter(([t]) => !t.toLowerCase().startsWith(p) && t.toLowerCase().includes(p))]
+      .filter(([t]) => t !== ctx.partial).slice(0, 8);
+    if (!items.length) return hideTagSuggest();
+    sugg = { items, idx: 0, kind: 'tag' };
+    tagSuggest.innerHTML = items.map(([t, c], i) => `<button data-i="${i}" class="${i === 0 ? 'on' : ''}">#${esc(t)}<span>${c}</span></button>`).join('');
+  }
   tagSuggest.hidden = false;
   const r = document.createRange(); r.setStart(ctx.node, ctx.start); r.setEnd(ctx.node, ctx.end);
   const rect = r.getBoundingClientRect(), box = tagSuggest.getBoundingClientRect();
@@ -1214,20 +1625,48 @@ function updateTagSuggest() {
 }
 function hideTagSuggest() { tagSuggest.hidden = true; sugg = { items: [], idx: 0 }; }
 function pickTag(i) {
-  const t = sugg.items[i]?.[0];
-  if (!t) return;
+  const it = sugg.items[i], kind = sugg.kind;
+  if (!it) return;
   if (composing) { editor.blur(); editor.focus(); } // end an unfinished Korean syllable before replacing it
   const ctx = tagContext();
   hideTagSuggest();
   if (!ctx) return;
   const r = document.createRange(); r.setStart(ctx.node, ctx.start); r.setEnd(ctx.node, ctx.end);
   const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
-  document.execCommand('insertText', false, `#${t} `);
+  if (kind === 'link') insertNoteLink(it);
+  else document.execCommand('insertText', false, `#${it[0]} `);
+}
+// typed as plain text, then made a link — insertHTML would drag inline font styles along. Both steps stay undoable.
+function insertNoteLink(n) {
+  const title = info(n).title, sel = getSelection();
+  document.execCommand('insertText', false, title);
+  const end = sel.getRangeAt(0), node = end.startContainer;
+  if (node.nodeType !== 3 || end.startOffset < title.length) return;
+  const pick = document.createRange();
+  pick.setStart(node, end.startOffset - title.length); pick.setEnd(node, end.startOffset);
+  sel.removeAllRanges(); sel.addRange(pick);
+  document.execCommand('createLink', false, `#note-${n.id}`);
+  for (const a of editor.querySelectorAll(`a[href="#note-${n.id}"]:not(.note-link)`)) { a.className = 'note-link'; a.dataset.note = n.id; }
+  sel.collapseToEnd();
+  document.execCommand('insertText', false, ' ');
+  // a space typed right after a link can end up inside it — move it out
+  const a = sel.anchorNode?.parentElement?.closest('a.note-link');
+  if (a && a.textContent.endsWith(' ')) { a.lastChild.data = a.lastChild.data.slice(0, -1); a.after(' '); sel.collapse(a.nextSibling, 1); }
+  saveEditor();
+}
+// linked notes show their current title; a link to a deleted note is greyed out
+function refreshNoteLinks() {
+  for (const a of editor.querySelectorAll('a.note-link')) {
+    const n = index.get(a.dataset.note), gone = !n || n.deleted;
+    a.classList.toggle('gone', gone);
+    if (!gone) { const t = info(n).title; if (a.textContent !== t) a.textContent = t; }
+  }
 }
 editor.addEventListener('input', () => setTimeout(updateTagSuggest));
 editor.addEventListener('blur', () => setTimeout(() => { if (!tagSuggest.matches(':hover')) hideTagSuggest(); }, 150));
 editor.addEventListener('keydown', (e) => {
   if (tagSuggest.hidden || e.isComposing) return;
+  if (!sugg.items.length) { if (e.key === 'Escape') hideTagSuggest(); return; }
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     e.preventDefault(); e.stopImmediatePropagation();
     sugg.idx = (sugg.idx + (e.key === 'ArrowDown' ? 1 : -1) + sugg.items.length) % sugg.items.length;
@@ -1444,6 +1883,10 @@ const sync = (() => {
     finally { busy = false; if (again) { again = false; schedule(200); } }
   }
 
+  // the folders / dates columns are added by supabase-folders.sql; until then notes still sync, just without them
+  let legacySchema = false;
+  const isMissingColumn = (e) => /column|schema cache/i.test(e.message || '') && /(folder|created_at|edited_at)/.test(e.message || '');
+  const schemaHint = () => toast('폴더를 기기끼리 맞추려면 supabase-folders.sql을 한 번 실행하세요');
   async function push() {
     const dirty = notes.filter((n) => n.dirty && !unsaved.has(n.id));
     if (!dirty.length) return;
@@ -1451,8 +1894,14 @@ const sync = (() => {
     for (let i = 0; i < dirty.length; i += 200) {
       const rows = dirty.slice(i, i + 200).map((n) => ({
         id: n.id, user_id: user.id, body: n.body, pinned: n.pinned, deleted: n.deleted, updated_at: new Date(n.updatedAt).toISOString(),
+        ...(legacySchema ? {} : {
+          folder: n.folder ?? null,
+          created_at: new Date(created(n)).toISOString(),
+          edited_at: new Date(edited(n)).toISOString(),
+        }),
       }));
-      const { error } = await sb.from('notes').upsert(rows);
+      let { error } = await sb.from('notes').upsert(rows);
+      if (error && !legacySchema && isMissingColumn(error)) { legacySchema = true; schemaHint(); i -= 200; continue; }
       if (error) throw error;
     }
     // only clear notes that weren't edited again while uploading
@@ -1480,8 +1929,9 @@ const sync = (() => {
     // re-read a 10s overlap so rows committed out of order aren't missed; applying is idempotent
     let since = cursor ? new Date(Date.parse(cursor) - 10000).toISOString() : '1970-01-01T00:00:00Z';
     for (;;) {
-      const { data, error } = await sb.from('notes').select('id,body,pinned,deleted,updated_at,synced_at')
-        .gt('synced_at', since).order('synced_at').limit(500);
+      const cols = legacySchema ? 'id,body,pinned,deleted,updated_at,synced_at' : 'id,body,pinned,deleted,updated_at,synced_at,folder,created_at,edited_at';
+      const { data, error } = await sb.from('notes').select(cols).gt('synced_at', since).order('synced_at').limit(500);
+      if (error && !legacySchema && isMissingColumn(error)) { legacySchema = true; schemaHint(); continue; }
       if (error) throw error;
       applyRemote(data);
       if (data.length) { since = data.at(-1).synced_at; await idb.set(key, since); }
@@ -1497,6 +1947,12 @@ const sync = (() => {
       if (n && n.updatedAt >= u) continue; // local copy is same or newer
       if (!n) { n = { id: r.id }; addNote(n); }
       Object.assign(n, { body: r.body, pinned: r.pinned, deleted: r.deleted, updatedAt: u, dirty: false });
+      if (!legacySchema) {
+        n.folder = r.folder ?? null;
+        if (r.created_at) n.createdAt = Date.parse(r.created_at);
+        n.editedAt = r.edited_at ? Date.parse(r.edited_at) : u;
+      }
+      if (isMeta(n)) settingsChanged();
       unsaved.delete(n.id);
       changedNotes.push(n);
       if (n === current) {
@@ -1562,7 +2018,7 @@ const sync = (() => {
 })();
 
 /* ---------------- settings dialog ---------------- */
-const VERSION = 'v25';
+const VERSION = 'v26';
 $('#appVersion').textContent = `Breeze 노트 ${VERSION}`;
 $('#syncBtn').onclick = () => { $('#authMsg').textContent = ''; sync.ui(); $('#settings').showModal(); };
 $('#loginBtn').onclick = sync.login;
@@ -1570,9 +2026,9 @@ $('#signupBtn').onclick = sync.signup;
 $('#logoutBtn').onclick = sync.logout;
 $('#syncNow').onclick = sync.now;
 $('#exportBtn').onclick = () => {
-  const data = notes.filter((n) => !n.deleted).map(({ id, body, pinned, updatedAt }) => ({ id, body, pinned, updatedAt }));
+  const data = notes.filter((n) => !n.deleted && !isMeta(n)).map(({ id, body, pinned, folder, createdAt, editedAt, updatedAt }) => ({ id, body, pinned, folder, createdAt, editedAt, updatedAt }));
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([JSON.stringify({ app: 'breeze', version: 1, notes: data }, null, 1)], { type: 'application/json' }));
+  a.href = URL.createObjectURL(new Blob([JSON.stringify({ app: 'breeze', version: 1, notes: data, folders: settings.folders, smart: settings.smart }, null, 1)], { type: 'application/json' }));
   a.download = `breeze-backup-${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
@@ -1581,13 +2037,16 @@ $('#importBtn').onclick = () => $('#importFile').click();
 $('#importFile').onchange = async (e) => {
   const f = e.target.files[0]; if (!f) return;
   try {
-    const { notes: incoming } = JSON.parse(await f.text());
+    const { notes: incoming, folders = [], smart = [] } = JSON.parse(await f.text());
+    // folders and smart folders the backup knows about but this device doesn't
+    const addNew = (have, from) => { const ids = new Set(have.map((x) => x.id)); const nw = from.filter((x) => x?.id && x.name && !ids.has(x.id)); have.push(...nw); return nw.length; };
+    if (addNew(settings.folders, folders) + addNew(settings.smart, smart)) saveSettings();
     let count = 0;
     for (const r of incoming) {
       if (!r.id || typeof r.body !== 'string') continue;
       const n = index.get(r.id);
       if (n && n.updatedAt >= r.updatedAt) continue;
-      const fresh = { id: r.id, body: r.body, pinned: !!r.pinned, deleted: false, updatedAt: r.updatedAt || Date.now(), dirty: true };
+      const fresh = { id: r.id, body: r.body, pinned: !!r.pinned, deleted: false, folder: r.folder ?? null, createdAt: r.createdAt, editedAt: r.editedAt || r.updatedAt, updatedAt: Date.now(), dirty: true };
       n ? Object.assign(n, fresh) : addNote(fresh);
       count++;
     }
@@ -1642,7 +2101,7 @@ async function importAppleNotes(fileList) {
     if (!p.startsWith('files/')) continue;
     if (isPhoto(f)) { photos++; est += Math.min(f.size, 250 * 1024); } else { others++; est += f.size; }
   }
-  if (!confirm(`애플 노트 ${incoming.length}개를 가져올까요?\n\n사진 ${photos}개(압축), 파일 ${others}개\n업로드 예상 용량: 약 ${fmtSize(est)} (무료 한도 1GB)\n\n폴더 이름은 #태그로 바뀝니다.`)) return;
+  if (!confirm(`애플 노트 ${incoming.length}개를 가져올까요?\n\n사진 ${photos}개(압축), 파일 ${others}개\n업로드 예상 용량: 약 ${fmtSize(est)} (무료 한도 1GB)\n\n애플 노트의 폴더는 같은 이름의 폴더로 들어갑니다.`)) return;
 
   let done = 0, skipped = 0, batch = [];
   for (const r of incoming) {
@@ -1666,9 +2125,14 @@ async function importAppleNotes(fileList) {
       if (pid) body += `<img data-img="${pid}">`;
       else if (f.size <= MAX_FILE) body += `<div>${fileChip(await storeBlob(f), a.name, f.size)}</div>`;
     }
-    if (r.folder && !['Notes', '메모'].includes(r.folder)) body += `<div>#${esc(r.folder.trim().replace(/[^\p{L}\p{N}_\-/]+/gu, '_'))}</div>`;
+    const fname = (r.folder || '').trim();
+    let folder = existing?.folder ?? null;
+    if (!folder && fname && !['Notes', '메모'].includes(fname)) {
+      folder = settings.folders.find((f) => f.name === fname)?.id;
+      if (!folder) { folder = crypto.randomUUID(); settings.folders.push({ id: folder, name: fname }); saveSettings(); }
+    }
 
-    const n = { id, body, pinned: false, deleted: false, updatedAt: r.modified, dirty: true };
+    const n = { id, body, pinned: false, deleted: false, folder, createdAt: r.created || r.modified, editedAt: r.modified, updatedAt: Math.max(r.modified, Date.now()), dirty: true };
     existing ? Object.assign(existing, n) : addNote(n);
     batch.push(existing || n);
     if (batch.length >= 25) { await persist(batch); batch = []; renderListSoon(); }
@@ -1729,7 +2193,8 @@ async function receiveShared() {
       if (pid) body += `<img data-img="${pid}">`;
       else if (f.size <= MAX_FILE) body += `<div>${fileChip(await storeBlob(f), f.name || '파일', f.size)}</div>`;
     }
-    last = { id: crypto.randomUUID(), body, pinned: false, deleted: false, updatedAt: it.at || Date.now(), dirty: true };
+    const at = it.at || Date.now();
+    last = { id: crypto.randomUUID(), body, pinned: false, deleted: false, folder: null, createdAt: at, editedAt: at, updatedAt: at, dirty: true };
     addNote(last);
   }
   if (!last) return;
@@ -1830,6 +2295,10 @@ for (const b of [$('#findNext'), $('#findPrev')]) b.addEventListener('pointerdow
 /* ---------------- boot ---------------- */
 (async () => {
   (await idb.all()).forEach(addNote);
+  loadSettings();
+  if ((scope.type === 'folder' && scope.id && !folderById(scope.id)) || (scope.type === 'smart' && !smartById(scope.id))) scope = { type: 'all' };
+  markScope();
+  renderFolders();
   const expired = notes.filter((n) => inTrash(n) && Date.now() - n.updatedAt > TRASH_DAYS * 864e5);
   expired.forEach(purge);
   if (expired.length) flush();

@@ -15,6 +15,16 @@
 </head>
 <body>
 <div id="app" class="show-list">
+  <nav id="folders" aria-label="폴더">
+    <header class="fold-head"><h1>폴더</h1></header>
+    <ul id="folderList"></ul>
+    <footer class="fold-foot">
+      <button id="newSmartBtn" class="foot-btn" title="태그·날짜·체크리스트 같은 조건으로 노트를 모아 보는 폴더">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M9 13h6M10.5 16h3M8 10h8"/></svg><span class="lbl">스마트 폴더</span></button>
+      <button id="newFolderBtn" class="foot-btn" title="새로운 폴더">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M12 10v6M9 13h6"/></svg>새로운 폴더</button>
+    </footer>
+  </nav>
   <aside id="sidebar">
     <div id="selBar" class="sel-bar" hidden>
       <button id="selAll" class="link">전체 선택</button>
@@ -22,6 +32,7 @@
       <button id="selDone" class="link">완료</button>
     </div>
     <header class="side-head">
+      <button id="foldersBtn" class="icon-btn folders-btn" title="폴더 보기/숨기기"><span class="fb-single"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>폴더</span><span class="fb-wide"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/><path d="M5.5 8h1.5M5.5 11h1.5"/></svg></span></button>
       <div class="side-title"><h1 id="sideTitle">노트</h1><span id="sideCount" class="side-count"></span></div>
       <button id="syncBtn" class="icon-btn sync-btn" title="동기화 설정"><span id="syncDot" class="dot off"></span>동기화</button>
       <button id="viewBtn" class="icon-btn" title="보기 옵션"><svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
@@ -29,7 +40,8 @@
         <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
       </button>
     </header>
-    <input id="search" type="search" placeholder="검색" autocomplete="off">
+    <input id="search" type="search" placeholder="검색 (#태그)" autocomplete="off">
+    <div id="searchSuggest" class="tag-suggest search-suggest" hidden></div>
     <div id="tags" hidden></div>
     <ul id="list"></ul>
     <div id="viewMenu" class="menu" hidden>
@@ -37,6 +49,13 @@
       <button data-view="gallery">갤러리로 보기</button>
       <hr>
       <button data-view="attachments">첨부 파일 보기</button>
+      <hr>
+      <div class="menu-label">정렬 기준</div>
+      <button data-sort="edited">편집일</button>
+      <button data-sort="created">생성일</button>
+      <button data-sort="title">제목</button>
+      <hr>
+      <button data-groupdates>날짜별로 그룹화</button>
     </div>
     <div id="selActions" class="sel-actions" hidden>
       <button data-sel="move">이동</button>
@@ -44,10 +63,6 @@
       <button data-sel="del" class="danger">삭제</button>
     </div>
     <footer class="side-foot">
-      <button id="trashBtn" class="foot-btn">
-        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
-        <span id="trashLabel">휴지통</span><span id="trashCount" class="count"></span>
-      </button>
       <span id="noteCount" class="note-count"></span>
       <button id="emptyTrashBtn" class="foot-btn danger" hidden>휴지통 비우기</button>
       <button id="composeBtn" class="icon-btn compose" title="새 노트"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button>
@@ -57,7 +72,7 @@
   <main id="editorPane" class="none">
     <header class="ed-head">
       <button id="backBtn" class="icon-btn back">
-        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>노트
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg><span id="backLabel">노트</span>
       </button>
       <button id="focusBtn" class="icon-btn wide-only" title="목록 숨기기/보이기"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg></button>
       <div class="trash-tools">
@@ -176,15 +191,49 @@
   <button data-tm="delete" class="danger-text">태그 삭제…</button>
 </div>
 
+<div id="folderMenu" class="menu tag-menu" hidden>
+  <button data-fm="edit">스마트 폴더 편집…</button>
+  <button data-fm="rename">이름 변경…</button>
+  <button data-fm="delete" class="danger-text">폴더 삭제…</button>
+</div>
+
 <div id="toast" hidden><span id="toastMsg"></span><button id="toastBtn" class="link"></button></div>
+
+<dialog id="moveSheet">
+  <form method="dialog" class="sheet">
+    <h2 id="moveTitle">폴더로 이동</h2>
+    <div id="moveChoices" class="move-choices"></div>
+    <div class="row"><button type="button" id="moveNewFolder">새로운 폴더…</button><button type="button" id="moveToTag">태그 붙이기…</button></div>
+    <div class="row end"><button value="cancel">취소</button></div>
+  </form>
+</dialog>
+
+<dialog id="smartSheet">
+  <form method="dialog" class="sheet smart">
+    <h2 id="smartTitle">새로운 스마트 폴더</h2>
+    <label>이름<input id="smartName" placeholder="예: 이번 주 할 일" autocomplete="off"></label>
+    <div class="smart-row"><span>조건</span><select id="smartMatch"><option value="all">모두 만족</option><option value="any">하나라도 만족</option></select></div>
+    <div class="smart-row top"><span>태그</span><div><div id="smartTags" class="tag-choices"></div>
+      <div class="smart-sub"><select id="smartTagMode"><option value="any">고른 태그 중 하나라도</option><option value="all">고른 태그 모두</option></select>
+      <label class="chk"><input type="checkbox" id="smartUntagged">태그 없음</label></div></div></div>
+    <div class="smart-row"><span>날짜</span><div class="smart-sub"><select id="smartDateField"><option value="edited">편집일</option><option value="created">생성일</option></select>
+      <select id="smartDate"><option value="">상관없음</option><option value="1">오늘</option><option value="7">지난 7일</option><option value="30">지난 30일</option><option value="90">지난 3개월</option><option value="365">지난 12개월</option><option value="-30">30일보다 오래됨</option><option value="-365">1년보다 오래됨</option></select></div></div>
+    <div class="smart-row"><span>체크리스트</span><select id="smartCheck"><option value="">상관없음</option><option value="any">있음</option><option value="undone">안 끝난 항목 있음</option><option value="done">모두 완료</option><option value="none">없음</option></select></div>
+    <div class="smart-row"><span>첨부 파일</span><select id="smartAtt"><option value="">상관없음</option><option value="any">아무 첨부나</option><option value="photo">사진</option><option value="link">링크</option><option value="file">파일</option><option value="none">없음</option></select></div>
+    <div class="smart-row"><span>폴더</span><select id="smartFolder"></select></div>
+    <div class="smart-row"><span>고정</span><label class="chk"><input type="checkbox" id="smartPinned">고정된 노트만</label></div>
+    <p id="smartCount" class="hint"></p>
+    <div class="row end"><button value="cancel">취소</button><button value="ok" class="primary">완료</button></div>
+  </form>
+</dialog>
 
 <dialog id="tagSheet">
   <form method="dialog" class="sheet">
-    <h2>태그로 옮기기</h2>
-    <p class="hint">선택한 노트에 태그를 붙여 한곳에 모읍니다. 태그는 폴더처럼 목록 위에서 골라 볼 수 있어요.</p>
+    <h2>태그 붙이기</h2>
+    <p class="hint">선택한 노트 끝에 #태그 한 줄을 붙입니다. 목록 위의 태그를 눌러 모아 볼 수 있어요.</p>
     <div id="tagChoices" class="tag-choices"></div>
     <label>태그<input id="newTag" placeholder="예: 설교" autocomplete="off"></label>
-    <div class="row end"><button type="button" id="tagCancel">취소</button><button value="ok" class="primary">옮기기</button></div>
+    <div class="row end"><button type="button" id="tagCancel">취소</button><button value="ok" class="primary">붙이기</button></div>
   </form>
 </dialog>
 

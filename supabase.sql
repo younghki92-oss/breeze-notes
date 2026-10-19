@@ -49,3 +49,8 @@ create policy "own images write" on storage.objects for insert to authenticated
   with check (bucket_id = 'images' and (storage.foldername(name))[1] = auth.uid()::text);
 create policy "own images update" on storage.objects for update to authenticated
   using (bucket_id = 'images' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- 폴더, 만든 날, 마지막으로 고친 날 (supabase-folders.sql과 같은 내용)
+alter table public.notes add column if not exists folder text;
+alter table public.notes add column if not exists created_at timestamptz;
+alter table public.notes add column if not exists edited_at timestamptz;
