@@ -363,3 +363,87 @@ html.touch #editorPane.editing:not(.reading) .undo-float { display: flex; }
 ::highlight(find) { background-color: #ffd60a59; }
 ::highlight(find-current) { background-color: #ff9f0a; color: #1d1d1f; }
 #editorPane.none #findBtn, #editorPane.trashed #findBtn { display: none; }
+
+/* ================= Apple Notes-style interface ================= */
+/* list header: title with the note count underneath ("958개의 노트") */
+.side-title { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.15; }
+.side-title h1 { flex: none; }
+.side-count { font-size: 12px; color: var(--mute); margin-top: 2px; }
+#newBtn { display: none; }                                   /* compose lives in the note toolbar (Mac) / bottom bar (phone) */
+#app:not(.phone):not(.single) .side-foot .compose, #app:not(.phone) .note-count { display: none; }
+@media (max-width: 599px) and (pointer: coarse), (max-width: 419px) { .side-count { display: none; } }
+
+/* toolbar buttons in rounded groups, like the macOS Notes toolbar */
+.tgroup { display: inline-flex; align-items: center; gap: 0; padding: 2px; border-radius: 20px; background: var(--field); }
+.tgroup .icon-btn { min-width: 34px; height: 32px; border-radius: 16px; }
+.ed-head { gap: 8px; }
+.ed-head .tools { gap: 8px; }
+.compose-group { margin-left: 4px; }
+#editorPane.reading .tools .tgroup.fmt { display: none; }
+@media (max-width: 599px) and (pointer: coarse), (max-width: 419px) {
+  .hdr-right.tgroup { background: none; padding: 0; }
+}
+
+/* ---------- text: quote, dash lists, nested lists, tabs ---------- */
+#editor blockquote:not([style]) { margin: 6px 0; padding: 2px 0 2px 12px; border-left: 3px solid var(--accent); color: color-mix(in srgb, var(--fg), var(--mute) 35%); }
+#editor ul.dash { list-style: none; padding-left: 20px; }
+#editor ul.dash > li { position: relative; }
+#editor ul.dash > li::before { content: "–"; position: absolute; left: -16px; color: var(--mute); }
+#editor ul ul, #editor ul ol, #editor ol ul, #editor ol ol { margin: 0; }
+#editor { tab-size: 4; }
+
+/* ---------- collapsible sections: chevron in the left margin of headings ---------- */
+#editor h1, #editor h2, #editor h3, #editor div.title { position: relative; }
+#editor h1::before, #editor h2::before, #editor h3::before, #editor div.title::before {
+  content: ""; position: absolute; left: -20px; top: 50%; width: 14px; height: 14px; margin-top: -7px; cursor: pointer;
+  background: var(--mute); opacity: 0; transition: opacity .12s, transform .15s;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") center/contain no-repeat;
+          mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") center/contain no-repeat; }
+#editor h1:hover::before, #editor h2:hover::before, #editor h3:hover::before, #editor div.title:hover::before { opacity: .8; }
+html.touch #editor h1::before, html.touch #editor h2::before, html.touch #editor h3::before { opacity: .45; }
+#editor [data-collapsed]::before { opacity: .9 !important; transform: rotate(-90deg); background: var(--accent); }
+#editor .sec-hidden { display: none !important; }
+#editor [data-collapsed].has-hidden::after { content: " …"; color: var(--mute); font-weight: 400; }
+
+/* ---------- Aa menu additions ---------- */
+.style-menu { max-height: calc(var(--vvh, 100dvh) - 16px); overflow-y: auto; }
+.style-menu .st-quote { border-left: 3px solid var(--accent); padding-left: 8px !important; margin-left: 2px; }
+.style-menu .st-label { font-size: 11px; font-weight: 600; color: var(--mute); padding: 10px 6px 0; }
+.style-menu .st-wrap { flex-wrap: wrap; }
+.style-menu .st-wrap button { flex: 1 1 45%; font-size: 13px; }
+.style-menu .st-row button { font-size: 13px; }
+.style-menu .st-hl { justify-content: space-between; }
+.style-menu .st-hl button { flex: none; width: 28px; height: 28px; padding: 0; border-radius: 50%; }
+.hl-purple { background: rgba(191, 90, 242, .6) !important; } .hl-pink { background: rgba(255, 55, 135, .6) !important; }
+.hl-orange { background: rgba(255, 159, 10, .7) !important; } .hl-mint { background: rgba(0, 199, 190, .6) !important; }
+.hl-blue { background: rgba(10, 132, 255, .6) !important; }
+.st-toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; padding: 8px 6px 2px; color: var(--fg); cursor: pointer; }
+
+/* ---------- tag browser: selected / excluded / any-all / untagged / drop target ---------- */
+.tag.off { background: transparent; box-shadow: inset 0 0 0 1px #ff453a; color: #ff453a; text-decoration: line-through; }
+.tag.off span { color: #ff453a99; }
+.tag.mode { background: var(--accent); color: #1d1d1f; font-weight: 600; }
+.tag.untagged { color: var(--mute); }
+.tag.untagged.on { color: #1d1d1f; }
+.tag.clear { background: none; color: var(--accent); font-weight: 600; }
+.tag.drop { outline: 2px dashed var(--accent); outline-offset: 1px; }
+
+/* ---------- # suggestions ---------- */
+.tag-suggest { position: fixed; z-index: 40; min-width: 160px; max-width: 280px; display: flex; flex-direction: column; padding: 4px; border-radius: 10px;
+  border: 1px solid var(--line); background: color-mix(in srgb, var(--side), var(--fg) 6%); box-shadow: 0 10px 28px #0006; }
+.tag-suggest[hidden] { display: none; }
+.tag-suggest button { display: flex; justify-content: space-between; gap: 12px; border: 0; background: none; padding: 6px 10px; border-radius: 7px; font-size: 14px; text-align: left; cursor: pointer; color: var(--fg); }
+.tag-suggest button span { color: var(--mute); font-size: 12px; }
+.tag-suggest button.on { background: var(--accent); color: #1d1d1f; }
+.tag-suggest button.on span { color: #1d1d1fa0; }
+.tag-menu { position: fixed; top: 0; right: auto; }
+.danger-text { color: #ff453a !important; }
+
+/* ---------- find & replace ---------- */
+.find-bar { flex-wrap: wrap; }
+.replace-row { display: flex; align-items: center; gap: 8px; flex-basis: 100%; padding: 4px 0 2px; border-top: 1px solid var(--line); }
+.replace-row[hidden] { display: none; }
+.replace-row input { flex: 1; min-width: 0; border: 0; background: none; color: var(--fg); font: inherit; font-size: 15px; outline: none; padding: 6px 0; }
+@media (max-width: 599px) and (pointer: coarse), (max-width: 419px) {
+  #editor { padding-left: 28px; } /* room for section chevrons, away from the back-swipe edge */
+}

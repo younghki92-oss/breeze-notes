@@ -22,7 +22,7 @@
       <button id="selDone" class="link">완료</button>
     </div>
     <header class="side-head">
-      <h1 id="sideTitle">노트</h1>
+      <div class="side-title"><h1 id="sideTitle">노트</h1><span id="sideCount" class="side-count"></span></div>
       <button id="syncBtn" class="icon-btn sync-btn" title="동기화 설정"><span id="syncDot" class="dot off"></span>동기화</button>
       <button id="viewBtn" class="icon-btn" title="보기 옵션"><svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
       <button id="newBtn" class="icon-btn" title="새 노트 (⌘N)">
@@ -65,17 +65,21 @@
         <button id="restoreBtn" class="pill">복구</button>
         <button id="purgeBtn" class="pill danger">영구 삭제</button>
       </div>
+      <div class="tgroup wide-only compose-group"><button class="icon-btn" data-cmd="new" title="새 메모 (⌘N)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16Z"/><path d="m13.5 6.5 4 4"/><path d="M14 20h6"/></svg></button></div>
       <div class="tools">
-        <button class="icon-btn fmt" data-cmd="check" title="체크리스트 (⌘⇧L)"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg></button>
-        <button class="icon-btn fmt" data-cmd="list" title="글머리 목록"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1" fill="currentColor"/><circle cx="4.5" cy="12" r="1" fill="currentColor"/><circle cx="4.5" cy="18" r="1" fill="currentColor"/></svg></button>
-        <button class="icon-btn fmt" data-cmd="file" title="파일 첨부"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21 11-8.6 8.6a5 5 0 0 1-7-7l8.5-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.3-2.4l7.9-7.9"/></svg></button>
-        <button class="icon-btn fmt" data-cmd="photo" title="사진 넣기"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="15" rx="3"/><circle cx="9" cy="11" r="2"/><path d="m21 17-5-5-9 8"/></svg></button>
-        <button class="icon-btn fmt" data-cmd="heading" title="스타일"><b class="txt">Aa</b></button>
-        <button class="icon-btn fmt" data-cmd="bold" title="굵게 (⌘B)"><b class="txt">B</b></button>
-        <button class="icon-btn" data-cmd="pin" title="고정"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3Z"/></svg></button>
-        <button class="icon-btn" data-cmd="del" title="삭제"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
+        <div class="tgroup fmt">
+          <button class="icon-btn fmt" data-cmd="heading" title="스타일"><b class="txt">Aa</b></button>
+          <button class="icon-btn fmt" data-cmd="check" title="체크리스트 (⌘⇧L)"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg></button>
+          <button class="icon-btn fmt" data-cmd="list" title="글머리 목록"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1" fill="currentColor"/><circle cx="4.5" cy="12" r="1" fill="currentColor"/><circle cx="4.5" cy="18" r="1" fill="currentColor"/></svg></button>
+          <button class="icon-btn fmt" data-cmd="photo" title="사진 넣기"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="15" rx="3"/><circle cx="9" cy="11" r="2"/><path d="m21 17-5-5-9 8"/></svg></button>
+          <button class="icon-btn fmt" data-cmd="file" title="파일 첨부"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21 11-8.6 8.6a5 5 0 0 1-7-7l8.5-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.3-2.4l7.9-7.9"/></svg></button>
+        </div>
+        <div class="tgroup">
+          <button class="icon-btn" data-cmd="pin" title="고정"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3Z"/></svg></button>
+          <button class="icon-btn" data-cmd="del" title="삭제"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
+        </div>
       </div>
-      <div class="hdr-right">
+      <div class="hdr-right tgroup">
         <button id="findBtn" class="icon-btn" title="노트에서 찾기 (⌘F)"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg></button>
         <button id="readBtn" class="icon-btn read-btn" title="읽기 모드 (누르면 켜고 끔)"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5.5C4.5 4 8 4 12 6.5 16 4 19.5 4 22 5.5V19c-2.5-1.5-6-1.5-10 1-4-2.5-7.5-2.5-10-1Z"/><path d="M12 6.5V20"/></svg></button>
       </div>
@@ -91,7 +95,13 @@
       <span id="findCount"></span>
       <button id="findPrev" class="icon-btn" title="이전 (⇧Enter)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"/></svg></button>
       <button id="findNext" class="icon-btn" title="다음 (Enter)"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></button>
+      <button id="replaceToggle" class="link" title="바꾸기">바꾸기</button>
       <button id="findClose" class="link">완료</button>
+      <div id="replaceRow" class="replace-row" hidden>
+        <input id="replaceInput" type="text" placeholder="바꿀 내용" autocomplete="off">
+        <button id="replaceOne" class="link">바꾸기</button>
+        <button id="replaceAll" class="link">모두 바꾸기</button>
+      </div>
     </div>
     <div id="noteDate"></div>
     <div id="editor" contenteditable="false" spellcheck="false"></div>
@@ -120,6 +130,7 @@
   <button data-style="subheading" class="st-sub">부머리말</button>
   <button data-style="body">본문</button>
   <button data-style="mono" class="st-mono">고정폭</button>
+  <button data-style="quote" class="st-quote">블록 인용</button>
   <div class="st-row">
     <button data-inline="bold" title="굵게 (⌘B)"><b>B</b></button>
     <button data-inline="italic" title="기울임 (⌘I)"><i>I</i></button>
@@ -128,8 +139,41 @@
   </div>
   <div class="st-row">
     <button data-list="ul" title="글머리 목록">• 목록</button>
+    <button data-list="dash" title="대시 목록">– 대시</button>
     <button data-list="ol" title="번호 목록">1. 번호</button>
   </div>
+  <div class="st-row">
+    <button data-indent="out" title="내어쓰기 (⇧Tab, ⌘[)">⇤ 내어쓰기</button>
+    <button data-indent="in" title="들여쓰기 (Tab, ⌘])">들여쓰기 ⇥</button>
+  </div>
+  <div class="st-row st-hl" title="하이라이트">
+    <button data-hl="none" class="hl-none" title="하이라이트 지우기">⌀</button>
+    <button data-hl="purple" class="hl-dot hl-purple" title="보라"></button>
+    <button data-hl="pink" class="hl-dot hl-pink" title="분홍"></button>
+    <button data-hl="orange" class="hl-dot hl-orange" title="주황"></button>
+    <button data-hl="mint" class="hl-dot hl-mint" title="민트"></button>
+    <button data-hl="blue" class="hl-dot hl-blue" title="파랑"></button>
+  </div>
+  <div class="st-label">체크리스트</div>
+  <div class="st-row st-wrap">
+    <button data-chk="all">모두 체크</button>
+    <button data-chk="none">모두 해제</button>
+    <button data-chk="sort">체크 항목 아래로</button>
+    <button data-chk="delete">체크 항목 삭제</button>
+  </div>
+  <label class="st-toggle"><input type="checkbox" id="autoSortChk"> 체크하면 자동으로 아래로</label>
+  <div class="st-label">섹션</div>
+  <div class="st-row">
+    <button data-sec="collapse">모두 접기</button>
+    <button data-sec="expand">모두 펼치기</button>
+  </div>
+</div>
+
+<div id="tagSuggest" class="tag-suggest" hidden></div>
+<div id="tagMenu" class="menu tag-menu" hidden>
+  <button data-tm="exclude">이 태그 제외하고 보기</button>
+  <button data-tm="rename">태그 이름 바꾸기…</button>
+  <button data-tm="delete" class="danger-text">태그 삭제…</button>
 </div>
 
 <div id="toast" hidden><span id="toastMsg"></span><button id="toastBtn" class="link"></button></div>

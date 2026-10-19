@@ -126,7 +126,17 @@ function tagsOf(n) {
   tagCache.set(n.id, [t, tags]);
   return tags;
 }
-let activeTag = null;
+// inc: notes must have these tags (any or all of them) · exc: notes must not · untagged: notes with no tags
+const tagSel = { inc: [], exc: [], mode: 'any', untagged: false };
+const tagFilterOn = () => tagSel.inc.length || tagSel.exc.length || tagSel.untagged;
+function matchesTags(n) {
+  const ts = tagsOf(n);
+  if (tagSel.untagged && ts.length) return false;
+  if (tagSel.exc.some((t) => ts.includes(t))) return false;
+  if (!tagSel.inc.length) return true;
+  return tagSel.mode === 'all' ? tagSel.inc.every((t) => ts.includes(t)) : tagSel.inc.some((t) => ts.includes(t));
+}
+function clearTagSel() { tagSel.inc = []; tagSel.exc = []; tagSel.untagged = false; }
 // Deleted notes keep their body for 30 days (the trash); an empty body means permanently deleted.
 const TRASH_DAYS = 30;
 const hasContent = (n) => !!textOf(n).trim() || n.body.includes('<img');
@@ -138,7 +148,7 @@ const visible = () => trashMode
 // what the list shows, in order — also drives arrow-key navigation
 function listed(all = visible()) {
   const q = search.value.trim().toLowerCase();
-  return all.filter((n) => (!q || textOf(n).toLowerCase().includes(q)) && (!activeTag || tagsOf(n).includes(activeTag)));
+  return all.filter((n) => (!q || textOf(n).toLowerCase().includes(q)) && (!tagFilterOn() || matchesTags(n)));
 }
 
 /* ---------------- list ---------------- */
@@ -162,13 +172,14 @@ function renderList() {
     const { title, preview } = info(n);
     const when = trashMode ? `${Math.max(1, Math.ceil(TRASH_DAYS - (Date.now() - n.updatedAt) / 864e5))}일 남음` : fmt(n.updatedAt);
     const thumb = /<img data-img="([^"]+)"/.exec(n.body);
-    return `<li data-id="${n.id}" class="${n === current ? 'active' : ''}${sel(n)}"><div class="sw"><div class="txt"><div class="t">${n.pinned && !trashMode ? PIN : ''}${esc(title)}</div><div class="p"><time>${when}</time>${esc(preview)}</div></div>${thumb ? `<img class="thumb" data-img="${thumb[1]}" alt="">` : ''}</div></li>`;
+    return `<li data-id="${n.id}" class="${n === current ? 'active' : ''}${sel(n)}"${touchUI ? '' : ' draggable="true"'}><div class="sw"><div class="txt"><div class="t">${n.pinned && !trashMode ? PIN : ''}${esc(title)}</div><div class="p"><time>${when}</time>${esc(preview)}</div></div>${thumb ? `<img class="thumb" data-img="${thumb[1]}" alt="">` : ''}</div></li>`;
   };
   const trashCount = notes.filter(inTrash).length;
   $('#trashCount').textContent = trashCount || '';
   $('#emptyTrashBtn').hidden = !trashMode || !trashCount;
   $('#composeBtn').hidden = trashMode;
   $('#noteCount').textContent = trashMode ? '' : `노트 ${all.length}개`;
+  $('#sideCount').textContent = trashMode ? `${trashCount}개의 노트` : `${all.length}개의 노트`;
   if (mode === 'attachments') return renderAttachments(items);
   const pinned = trashMode ? [] : items.filter((n) => n.pinned), rest = items.filter((n) => trashMode || !n.pinned);
   let html = '';
@@ -244,19 +255,119 @@ const thumbObserver = new IntersectionObserver((entries) => {
   }
 }, { root: list, rootMargin: '300px' });
 const tagBar = $('#tags');
+let tagCounts = new Map(); // tag → number of notes, also feeds the # suggestions
 function renderTags(all) {
   const counts = new Map();
   for (const n of all) for (const t of tagsOf(n)) counts.set(t, (counts.get(t) || 0) + 1);
-  if (activeTag && !counts.has(activeTag)) activeTag = null;
+  tagCounts = counts;
+  tagSel.inc = tagSel.inc.filter((t) => counts.has(t));
+  tagSel.exc = tagSel.exc.filter((t) => counts.has(t));
   const tags = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ko'));
   tagBar.hidden = trashMode || !tags.length;
-  tagBar.innerHTML = tags.map(([t, c]) => `<button class="tag${t === activeTag ? ' on' : ''}" data-tag="${esc(t)}">#${esc(t)}<span>${c}</span></button>`).join('');
+  const chip = ([t, c]) => {
+    const st = tagSel.inc.includes(t) ? ' on' : tagSel.exc.includes(t) ? ' off' : '';
+    return `<button class="tag${st}" data-tag="${esc(t)}" title="누르면 선택 · ${touchUI ? '길게 눌러' : '오른쪽 클릭으로'} 제외/이름 바꾸기">#${esc(t)}<span>${c}</span></button>`;
+  };
+  tagBar.innerHTML =
+    (tagSel.inc.length > 1 ? `<button class="tag mode" data-tagmode title="여러 태그를 고를 때의 조건">${tagSel.mode === 'all' ? '모두 포함' : '하나라도'} ▾</button>` : '') +
+    tags.map(chip).join('') +
+    `<button class="tag untagged${tagSel.untagged ? ' on' : ''}" data-untagged>태그 없음</button>` +
+    (tagFilterOn() ? '<button class="tag clear" data-tagclear>해제</button>' : '');
 }
 tagBar.addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.tagmode !== undefined) tagSel.mode = tagSel.mode === 'all' ? 'any' : 'all';
+  else if (b.dataset.untagged !== undefined) { tagSel.untagged = !tagSel.untagged; if (tagSel.untagged) tagSel.inc = []; }
+  else if (b.dataset.tagclear !== undefined) clearTagSel();
+  else if (b.dataset.tag) {
+    const t = b.dataset.tag;
+    if (e.altKey) return toggleTagExclude(t); // ⌥-click: exclude
+    tagSel.exc = tagSel.exc.filter((x) => x !== t);
+    tagSel.inc = tagSel.inc.includes(t) ? tagSel.inc.filter((x) => x !== t) : [...tagSel.inc, t];
+    if (tagSel.inc.length) tagSel.untagged = false;
+  }
+  list.scrollTop = 0;
+  renderList();
+});
+function toggleTagExclude(t) {
+  tagSel.inc = tagSel.inc.filter((x) => x !== t);
+  tagSel.exc = tagSel.exc.includes(t) ? tagSel.exc.filter((x) => x !== t) : [...tagSel.exc, t];
+  renderList();
+}
+// right-click (Mac) / long-press (phone) on a tag: exclude · rename · delete
+const tagMenu = $('#tagMenu');
+let tagMenuFor = null;
+tagBar.addEventListener('contextmenu', (e) => {
   const b = e.target.closest('[data-tag]');
   if (!b) return;
-  activeTag = activeTag === b.dataset.tag ? null : b.dataset.tag;
+  e.preventDefault();
+  tagMenuFor = b.dataset.tag;
+  tagMenu.querySelector('[data-tm=exclude]').textContent = tagSel.exc.includes(tagMenuFor) ? '제외 해제' : '이 태그 제외하고 보기';
+  tagMenu.hidden = false;
+  const r = b.getBoundingClientRect(), m = tagMenu.getBoundingClientRect();
+  tagMenu.style.left = `${Math.max(8, Math.min(innerWidth - m.width - 8, r.left))}px`;
+  tagMenu.style.top = `${r.bottom + 6}px`;
+});
+tagMenu.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-tm]');
+  if (!b || !tagMenuFor) return;
+  tagMenu.hidden = true;
+  const t = tagMenuFor;
+  if (b.dataset.tm === 'exclude') toggleTagExclude(t);
+  else if (b.dataset.tm === 'rename') {
+    const nw = (prompt(`#${t} 의 새 이름`, t) || '').trim().replace(/^#/, '').replace(/[^\p{L}\p{N}_\-/]+/gu, '_');
+    if (!nw || nw === t) return;
+    if (!/^[\p{L}_]/u.test(nw)) return toast('태그는 글자로 시작해야 합니다');
+    toast(`${retag(t, nw)}개 노트에서 #${t} → #${nw}`);
+  } else if (b.dataset.tm === 'delete') {
+    if (!confirm(`#${t} 태그를 모든 노트에서 지울까요? 노트 내용은 그대로 남습니다.`)) return;
+    toast(`${retag(t, null)}개 노트에서 #${t} 태그를 지웠습니다`);
+  }
+});
+document.addEventListener('pointerdown', (e) => { if (!tagMenu.hidden && !e.target.closest('#tagMenu')) tagMenu.hidden = true; });
+// rename (nw) or remove (nw = null) a tag in every note's text
+function retag(old, nw) {
+  const escRe = old.replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&');
+  const re = new RegExp(`(^|[\\s(>]|&nbsp;)#${escRe}(?![\\p{L}\\p{N}_\\-/])`, 'gu');
+  let k = 0;
+  for (const n of notes) {
+    if (n.deleted || !tagsOf(n).includes(old)) continue;
+    n.body = n.body.replace(re, nw ? `$1#${nw}` : '$1');
+    touch(n);
+    k++;
+  }
+  tagSel.inc = tagSel.inc.map((x) => (x === old ? nw : x)).filter(Boolean);
+  tagSel.exc = tagSel.exc.map((x) => (x === old ? nw : x)).filter(Boolean);
+  flush();
+  if (current) setBody(current.body);
   renderList();
+  return k;
+}
+// drag a note from the list onto a tag to tag it (Apple Notes does the same)
+tagBar.addEventListener('dragover', (e) => {
+  const b = e.target.closest('[data-tag]');
+  if (!b || !e.dataTransfer.types.includes('text/x-breeze-note')) return;
+  e.preventDefault();
+  for (const x of tagBar.querySelectorAll('.drop')) x.classList.remove('drop');
+  b.classList.add('drop');
+});
+tagBar.addEventListener('dragleave', (e) => e.target.closest?.('[data-tag]')?.classList.remove('drop'));
+tagBar.addEventListener('drop', (e) => {
+  const b = e.target.closest('[data-tag]');
+  if (!b) return;
+  e.preventDefault();
+  b.classList.remove('drop');
+  const ids = e.dataTransfer.getData('text/x-breeze-note').split(',');
+  const k = addTag(ids.map((id) => index.get(id)).filter(Boolean), b.dataset.tag);
+  toast(k ? `${k}개 노트에 #${b.dataset.tag} 태그를 붙였습니다` : `이미 #${b.dataset.tag} 태그가 붙어 있어요`);
+});
+list.addEventListener('dragstart', (e) => {
+  const li = e.target.closest?.('li[data-id]');
+  if (!li) return;
+  const ids = selecting && selected.has(li.dataset.id) ? [...selected] : [li.dataset.id];
+  e.dataTransfer.setData('text/x-breeze-note', ids.join(','));
+  e.dataTransfer.effectAllowed = 'copy';
 });
 let listRaf = 0;
 function renderListSoon() {
@@ -433,6 +544,20 @@ $('#selActions').onclick = async (e) => {
     } catch {}
   } else openTagSheet(ns);
 };
+// add a tag line to notes that don't have the tag yet; returns how many changed
+function addTag(ns, t) {
+  let k = 0;
+  for (const n of ns) {
+    if (n.deleted || tagsOf(n).includes(t)) continue;
+    n.body += `<div>#${esc(t)}</div>`;
+    touch(n);
+    k++;
+  }
+  flush();
+  if (current && ns.includes(current)) setBody(current.body);
+  renderList();
+  return k;
+}
 // 이동: Breeze uses tags as folders, so moving = adding a tag line to each note.
 function openTagSheet(ns) {
   const tags = [...new Set(notes.filter((n) => !n.deleted).flatMap(tagsOf))].sort((a, b) => a.localeCompare(b, 'ko'));
@@ -444,15 +569,7 @@ function openTagSheet(ns) {
     if (d.returnValue !== 'ok') return;
     const t = $('#newTag').value.trim().replace(/^#/, '').replace(/[^\p{L}\p{N}_\-/]+/gu, '_');
     if (!/^[\p{L}_]/u.test(t)) { toast('태그는 글자로 시작해야 합니다'); return; }
-    let k = 0;
-    for (const n of ns) {
-      if (tagsOf(n).includes(t)) continue;
-      n.body += `<div>#${esc(t)}</div>`;
-      touch(n);
-      k++;
-    }
-    flush();
-    if (current && ns.includes(current)) setBody(current.body);
+    const k = addTag(ns, t);
     exitSelect();
     toast(`${k}개 노트를 #${t}(으)로 옮겼습니다`);
   };
@@ -579,7 +696,7 @@ function setTrash(on) {
   if (current) leave(current);
   current = null;
   trashMode = on;
-  activeTag = null;
+  clearTagSel();
   search.value = '';
   $('#sideTitle').textContent = on ? '휴지통' : '노트';
   $('#trashLabel').textContent = on ? '‹ 모든 노트' : '휴지통';
@@ -693,7 +810,7 @@ function saveEditor() {
   current.body = editor.innerHTML
     .replace(/<img\b[^>]*?data-img="([^"]+)"[^>]*>/g, '<img data-img="$1">')
     .replace(/ class="([^"]*)"/g, (_m, c) => { // the title mark is display-only
-      const keep = c.split(/\s+/).filter((k) => k && k !== 'title');
+      const keep = c.split(/\s+/).filter((k) => k && !['title', 'sec-hidden', 'has-hidden'].includes(k));
       return keep.length ? ` class="${keep.join(' ')}"` : '';
     });
   touch(current);
@@ -759,6 +876,7 @@ editor.addEventListener('click', (e) => {
 function setBody(html) {
   editor.innerHTML = html || (current ? '<div><br></div>' : '');
   markTitle();
+  applySections();
   hydrate();
   highlightTags();
 }
@@ -892,10 +1010,17 @@ editor.addEventListener('pointerdown', (e) => {
   if (!li || e.clientX - li.getBoundingClientRect().left > 26) return;
   e.preventDefault();
   li.classList.toggle('done');
+  if (autoSortChecked) sortChecklist(li.parentElement);
+  navigator.vibrate?.(8);
   editor.dispatchEvent(new Event('input'));
 });
 editor.addEventListener('keydown', (e) => {
+  if (e.isComposing) return;
   if (e.key === 'Escape' && !mobile.matches) { e.preventDefault(); editor.blur(); list.focus(); return; }
+  const mod = e.metaKey || e.ctrlKey;
+  if (e.key === 'Tab' && !mod && !e.altKey) { e.preventDefault(); if (!indent(e.shiftKey ? 'out' : 'in') && !e.shiftKey) document.execCommand('insertText', false, '\t'); return; }
+  if (mod && !e.shiftKey && (e.key === ']' || e.key === '[')) { e.preventDefault(); indent(e.key === ']' ? 'in' : 'out'); return; }
+  if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && ((e.ctrlKey && e.metaKey) || (e.altKey && e.shiftKey))) { e.preventDefault(); moveLine(e.key === 'ArrowUp' ? -1 : 1); return; }
   if (e.key === 'Enter') setTimeout(() => { const li = elAt()?.closest('ul.checklist > li'); if (li && !li.textContent) li.classList.remove('done'); });
 });
 
@@ -906,18 +1031,8 @@ const changed = () => editor.dispatchEvent(new Event('input'));
 const cmds = {
   bold: () => document.execCommand('bold'),
   heading: (btn) => openStyleMenu(btn), // Aa: 제목 · 머리말 · 부머리말 · 본문 · 고정폭, B I U S, lists
-  list: () => {
-    const ul = ulAt();
-    if (ul?.classList.contains('checklist')) { ul.classList.remove('checklist'); changed(); }
-    else document.execCommand('insertUnorderedList');
-  },
-  check: () => {
-    let ul = ulAt();
-    if (ul) { ul.classList.toggle('checklist'); changed(); return; }
-    document.execCommand('insertUnorderedList');
-    ulAt()?.classList.add('checklist');
-    changed();
-  },
+  list: () => setList('ul'),
+  check: () => setList('check'),
   pin: () => { current.pinned = !current.pinned; syncPin(); touch(current); renderList(); },
   del: () => removeNote(current),
   new: () => newNote(),
@@ -931,19 +1046,219 @@ const cmds = {
 for (const b of document.querySelectorAll('[data-cmd]')) {
   b.addEventListener('pointerdown', (e) => e.preventDefault()); // keep the caret in the editor
   b.addEventListener('click', () => {
-    if (!current) return;
     const c = b.dataset.cmd;
+    if (!current && c !== 'new') return;
     if (!['pin', 'del', 'photo', 'file', 'new'].includes(c) && !editor.contains(getSelection().anchorNode)) { editor.focus(); caretEnd(); }
     cmds[c](b);
   });
 }
 
+/* ---------------- lists, checklists, indentation (Apple Notes Format menu) ---------------- */
+// Chrome's list/block commands keep the text but rebuild the line and drop the cursor at its start.
+// The text itself doesn't change, so remember the cursor as "N characters into the note" and put it back.
+function keepCaret(fn) {
+  const sel = getSelection();
+  let at = -1;
+  const lineStart = sel.anchorOffset === 0; // at a line start, prefer the next line over the end of the previous one
+  if (sel.rangeCount && sel.isCollapsed && editor.contains(sel.anchorNode)) {
+    const r = document.createRange();
+    r.setStart(editor, 0);
+    r.setEnd(sel.anchorNode, sel.anchorOffset);
+    at = r.toString().length;
+  }
+  fn();
+  if (at < 0) return;
+  const walk = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+  let left = at, last = null;
+  for (let t; (t = walk.nextNode());) {
+    last = t;
+    if (left < t.length || (left === t.length && !lineStart)) { const r = document.createRange(); r.setStart(t, left); r.collapse(true); sel.removeAllRanges(); sel.addRange(r); return; }
+    left -= t.length;
+  }
+  if (last) { const r = document.createRange(); r.setStart(last, last.length); r.collapse(true); sel.removeAllRanges(); sel.addRange(r); }
+}
+// kind: 'ul' bullets · 'dash' dashes · 'check' checklist · 'ol' numbers. Choosing the current kind again removes the list.
+function setList(kind) { keepCaret(() => setListNow(kind)); changed(); }
+function setListNow(kind) {
+  const ul = ulAt();
+  const curKind = !ul ? null : ul.tagName === 'OL' ? 'ol' : ul.classList.contains('checklist') ? 'check' : ul.classList.contains('dash') ? 'dash' : 'ul';
+  if (ul && curKind === kind) { document.execCommand(kind === 'ol' ? 'insertOrderedList' : 'insertUnorderedList'); return; }
+  if (ul && (kind === 'ol') !== (ul.tagName === 'OL')) document.execCommand(kind === 'ol' ? 'insertOrderedList' : 'insertUnorderedList');
+  else if (!ul) document.execCommand(kind === 'ol' ? 'insertOrderedList' : 'insertUnorderedList');
+  const now = ulAt();
+  if (now && now.tagName === 'UL') {
+    now.classList.toggle('checklist', kind === 'check');
+    now.classList.toggle('dash', kind === 'dash');
+    if (!now.className) now.removeAttribute('class');
+  }
+}
+function indent(dir) {
+  if (!ulAt()) return false; // Tab outside a list stays a normal tab
+  keepCaret(() => document.execCommand(dir === 'in' ? 'indent' : 'outdent'));
+  // a nested list keeps the look of its parent (checklist circles, dashes)
+  const ul = ulAt(), parent = ul?.parentElement?.closest('#editor ul');
+  if (ul && parent && ul.tagName === 'UL') for (const c of ['checklist', 'dash']) ul.classList.toggle(c, parent.classList.contains(c));
+  changed();
+  return true;
+}
+let autoSortChecked = false;
+try { autoSortChecked = localStorage.getItem('breeze.autoSortChecked') === '1'; } catch {}
+// checked items sink below unchecked ones, keeping each group's order
+function sortChecklist(ul) {
+  if (!ul) return;
+  const items = [...ul.children].filter((x) => x.tagName === 'LI');
+  for (const li of [...items.filter((x) => !x.classList.contains('done')), ...items.filter((x) => x.classList.contains('done'))]) ul.append(li);
+}
+function checklistOp(op) {
+  if (!current) return;
+  const here = elAt()?.closest('#editor ul.checklist');
+  const lists = here ? [here] : [...editor.querySelectorAll('ul.checklist')]; // in a checklist: that one; otherwise the whole note
+  if (!lists.length) { toast('체크리스트가 없습니다'); return; }
+  for (const ul of lists) {
+    const items = [...ul.children].filter((x) => x.tagName === 'LI');
+    if (op === 'all') items.forEach((li) => li.classList.add('done'));
+    else if (op === 'none') items.forEach((li) => li.classList.remove('done'));
+    else if (op === 'sort') sortChecklist(ul);
+    else if (op === 'delete') { items.filter((li) => li.classList.contains('done')).forEach((li) => li.remove()); if (!ul.children.length) ul.remove(); }
+  }
+  changed();
+}
+
+/* ---------------- collapsible sections (title / headings) ---------------- */
+// A heading with data-collapsed="1" hides what follows it until the next heading of the same or a higher level.
+const HEADING_SEL = '#editor h1, #editor h2, #editor h3, #editor div.title';
+const levelOf = (el) => (el.matches('div.title, h1') ? 1 : el.tagName === 'H2' ? 2 : el.tagName === 'H3' ? 3 : 9);
+const isHeading = (el) => el?.nodeType === 1 && el.matches(HEADING_SEL);
+function applySections() {
+  for (const el of editor.querySelectorAll('.sec-hidden')) el.classList.remove('sec-hidden');
+  const parents = new Set([...editor.querySelectorAll(HEADING_SEL)].map((h) => h.parentElement));
+  for (const parent of parents) {
+    let hideLevel = 0; // 0 = not hiding
+    for (const el of parent.children) {
+      if (isHeading(el) && hideLevel && levelOf(el) <= hideLevel) hideLevel = 0;
+      if (hideLevel) { el.classList.add('sec-hidden'); continue; }
+      if (isHeading(el) && el.dataset.collapsed) hideLevel = levelOf(el);
+    }
+  }
+  for (const h of editor.querySelectorAll('[data-collapsed]')) {
+    if (!isHeading(h)) delete h.dataset.collapsed; // the line stopped being a heading
+    else h.classList.toggle('has-hidden', !!h.nextElementSibling?.classList.contains('sec-hidden'));
+  }
+}
+function toggleSection(h, open = !!h.dataset.collapsed) {
+  if (open) delete h.dataset.collapsed; else h.dataset.collapsed = '1';
+  applySections();
+  changed();
+}
+function setAllSections(collapse) {
+  for (const h of editor.querySelectorAll(HEADING_SEL)) {
+    const hasBody = h.nextElementSibling && !isHeading(h.nextElementSibling);
+    if (collapse && hasBody && !h.matches('div.title')) h.dataset.collapsed = '1'; else delete h.dataset.collapsed;
+  }
+  applySections();
+  changed();
+}
+// open whatever section hides this node (used by find)
+function revealNode(node) {
+  let el = node?.nodeType === 1 ? node : node?.parentElement;
+  let guard = 0;
+  while ((el = el?.closest('.sec-hidden')) && guard++ < 20) {
+    let h = el.previousElementSibling;
+    while (h && !(isHeading(h) && h.dataset.collapsed)) h = h.previousElementSibling;
+    if (!h) break;
+    delete h.dataset.collapsed;
+    applySections();
+  }
+}
+// click the chevron in the left margin of a heading
+editor.addEventListener('pointerdown', (e) => {
+  const h = e.target.closest?.(HEADING_SEL);
+  if (!h || e.clientX > h.getBoundingClientRect().left + 2) return;
+  e.preventDefault();
+  toggleSection(h);
+});
+
+/* ---------------- tag suggestions: type # and pick an existing tag ---------------- */
+const tagSuggest = $('#tagSuggest');
+let sugg = { items: [], idx: 0 };
+let composing = false;
+editor.addEventListener('compositionstart', () => { composing = true; });
+editor.addEventListener('compositionend', () => { composing = false; setTimeout(updateTagSuggest); });
+// the "#partial" right before the caret, if any
+function tagContext() {
+  const sel = getSelection();
+  const node = sel.anchorNode;
+  if (!sel.isCollapsed || !node || node.nodeType !== 3 || !editor.contains(node)) return null;
+  const before = node.data.slice(0, sel.anchorOffset);
+  const m = /(?:^|[\s(])#([\p{L}\p{N}_\-/]*)$/u.exec(before);
+  if (!m) return null;
+  const start = m.index + m[0].indexOf('#');
+  return { node, start, end: sel.anchorOffset, partial: m[1] };
+}
+function updateTagSuggest() {
+  const ctx = current && !reading ? tagContext() : null;
+  if (!ctx) return hideTagSuggest();
+  const p = ctx.partial.toLowerCase();
+  const all = [...tagCounts].sort((a, b) => b[1] - a[1]);
+  const items = [...all.filter(([t]) => t.toLowerCase().startsWith(p)), ...all.filter(([t]) => !t.toLowerCase().startsWith(p) && t.toLowerCase().includes(p))]
+    .filter(([t]) => t !== ctx.partial).slice(0, 8);
+  if (!items.length) return hideTagSuggest();
+  sugg = { items, idx: 0 };
+  tagSuggest.innerHTML = items.map(([t, c], i) => `<button data-i="${i}" class="${i === 0 ? 'on' : ''}">#${esc(t)}<span>${c}</span></button>`).join('');
+  tagSuggest.hidden = false;
+  const r = document.createRange(); r.setStart(ctx.node, ctx.start); r.setEnd(ctx.node, ctx.end);
+  const rect = r.getBoundingClientRect(), box = tagSuggest.getBoundingClientRect();
+  const below = rect.bottom + box.height + 8 < (window.visualViewport?.height || innerHeight);
+  tagSuggest.style.left = `${Math.max(8, Math.min(innerWidth - box.width - 8, rect.left))}px`;
+  tagSuggest.style.top = `${below ? rect.bottom + 4 : rect.top - box.height - 4}px`;
+}
+function hideTagSuggest() { tagSuggest.hidden = true; sugg = { items: [], idx: 0 }; }
+function pickTag(i) {
+  const t = sugg.items[i]?.[0];
+  if (!t) return;
+  if (composing) { editor.blur(); editor.focus(); } // end an unfinished Korean syllable before replacing it
+  const ctx = tagContext();
+  hideTagSuggest();
+  if (!ctx) return;
+  const r = document.createRange(); r.setStart(ctx.node, ctx.start); r.setEnd(ctx.node, ctx.end);
+  const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+  document.execCommand('insertText', false, `#${t} `);
+}
+editor.addEventListener('input', () => setTimeout(updateTagSuggest));
+editor.addEventListener('blur', () => setTimeout(() => { if (!tagSuggest.matches(':hover')) hideTagSuggest(); }, 150));
+editor.addEventListener('keydown', (e) => {
+  if (tagSuggest.hidden || e.isComposing) return;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault(); e.stopImmediatePropagation();
+    sugg.idx = (sugg.idx + (e.key === 'ArrowDown' ? 1 : -1) + sugg.items.length) % sugg.items.length;
+    tagSuggest.querySelectorAll('button').forEach((b, i) => b.classList.toggle('on', i === sugg.idx));
+  } else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); e.stopImmediatePropagation(); pickTag(sugg.idx); }
+  else if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); hideTagSuggest(); }
+}, true);
+tagSuggest.addEventListener('pointerdown', (e) => e.preventDefault()); // keep the caret
+tagSuggest.addEventListener('click', (e) => { const b = e.target.closest('[data-i]'); if (b) pickTag(+b.dataset.i); });
+
+/* ---------------- move the current line up / down (⌃⌘↑↓) ---------------- */
+function moveLine(dir) {
+  let el = elAt()?.closest('li, p, div, h1, h2, h3, pre, blockquote, ul, ol');
+  if (!el || !editor.contains(el) || el === editor) return;
+  while (el.parentElement !== editor && !el.matches('li') && !(dir < 0 ? el.previousElementSibling : el.nextElementSibling)) el = el.parentElement;
+  const other = dir < 0 ? el.previousElementSibling : el.nextElementSibling;
+  if (!other) return;
+  const sel = getSelection(), r = sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+  dir < 0 ? other.before(el) : other.after(el);
+  if (r) { sel.removeAllRanges(); sel.addRange(r); }
+  markTitle();
+  applySections();
+  changed();
+}
+
 /* ---------------- Aa style menu (like Apple Notes) ---------------- */
 // 본문 uses <p> so that choosing it on the first line really turns the automatic title off
-const STYLES = { title: 'h1', heading: 'h2', subheading: 'h3', body: 'p', mono: 'pre' };
+const STYLES = { title: 'h1', heading: 'h2', subheading: 'h3', body: 'p', mono: 'pre', quote: 'blockquote' };
 const styleMenu = $('#styleMenu');
 function currentStyle() {
-  const b = elAt()?.closest('#editor h1, #editor h2, #editor h3, #editor pre, #editor p, #editor div');
+  const b = elAt()?.closest('#editor h1, #editor h2, #editor h3, #editor pre, #editor blockquote:not([style]), #editor p, #editor div');
   if (!b || b === editor) return 'body';
   if (b.classList.contains('title') && b.tagName === 'DIV') return 'title'; // the automatic first-line title
   return Object.keys(STYLES).find((k) => STYLES[k] === b.tagName.toLowerCase()) || 'body';
@@ -954,7 +1269,8 @@ function applyStyle(name) {
   if (!editor.contains(getSelection().anchorNode)) { editor.focus(); caretEnd(); }
   const ul = ulAt();
   if (ul && tag !== 'p') document.execCommand(ul.tagName === 'OL' ? 'insertOrderedList' : 'insertUnorderedList'); // leave the list first
-  document.execCommand('formatBlock', false, `<${tag}>`);
+  // choosing 블록 인용 again turns it back into body text
+  keepCaret(() => document.execCommand('formatBlock', false, name === 'quote' && currentStyle() === 'quote' ? '<p>' : `<${tag}>`));
   changed();
 }
 function openStyleMenu(btn) {
@@ -962,6 +1278,7 @@ function openStyleMenu(btn) {
   const cur = currentStyle();
   for (const b of styleMenu.querySelectorAll('[data-style]')) b.classList.toggle('on', b.dataset.style === cur);
   for (const b of styleMenu.querySelectorAll('[data-inline]')) b.classList.toggle('on', document.queryCommandState(b.dataset.inline));
+  $('#autoSortChk').checked = autoSortChecked;
   styleMenu.hidden = false;
   // open beside the Aa button: below it at the top of the screen, above it at the bottom
   const r = btn.getBoundingClientRect(), m = styleMenu.getBoundingClientRect();
@@ -976,8 +1293,27 @@ styleMenu.addEventListener('click', (e) => {
   if (!b) return;
   if (b.dataset.style) { applyStyle(b.dataset.style); styleMenu.hidden = true; }
   else if (b.dataset.inline) { document.execCommand(b.dataset.inline); b.classList.toggle('on', document.queryCommandState(b.dataset.inline)); changed(); }
-  else if (b.dataset.list) { document.execCommand(b.dataset.list === 'ol' ? 'insertOrderedList' : 'insertUnorderedList'); ulAt()?.classList.remove('checklist'); changed(); styleMenu.hidden = true; }
+  else if (b.dataset.list) { setList(b.dataset.list); styleMenu.hidden = true; }
+  else if (b.dataset.indent) { if (!indent(b.dataset.indent)) toast('들여쓰기는 목록에서 쓸 수 있어요'); }
+  else if (b.dataset.hl) highlight(b.dataset.hl);
+  else if (b.dataset.chk) { checklistOp(b.dataset.chk); styleMenu.hidden = true; }
+  else if (b.dataset.sec) { setAllSections(b.dataset.sec === 'collapse'); styleMenu.hidden = true; }
 });
+$('#autoSortChk').addEventListener('change', (e) => {
+  autoSortChecked = e.target.checked;
+  try { localStorage.setItem('breeze.autoSortChecked', autoSortChecked ? '1' : ''); } catch {}
+  if (autoSortChecked) checklistOp('sort');
+});
+// highlight colours (Apple Notes: purple, pink, orange, mint, blue) — translucent so they read in light and dark mode
+const HL = { purple: 'rgba(191, 90, 242, .32)', pink: 'rgba(255, 55, 135, .30)', orange: 'rgba(255, 159, 10, .36)', mint: 'rgba(0, 199, 190, .32)', blue: 'rgba(10, 132, 255, .30)' };
+function highlight(color) {
+  const sel = getSelection();
+  if (!sel.rangeCount || sel.isCollapsed || !editor.contains(sel.anchorNode)) { toast('하이라이트할 글자를 먼저 선택하세요'); return; }
+  document.execCommand('styleWithCSS', false, true);
+  document.execCommand('hiliteColor', false, color === 'none' ? 'transparent' : HL[color]);
+  document.execCommand('styleWithCSS', false, false);
+  changed();
+}
 document.addEventListener('pointerdown', (e) => { if (!styleMenu.hidden && !e.target.closest('#styleMenu, [data-cmd=heading]')) styleMenu.hidden = true; });
 
 addEventListener('keydown', (e) => {
@@ -1226,7 +1562,7 @@ const sync = (() => {
 })();
 
 /* ---------------- settings dialog ---------------- */
-const VERSION = 'v24';
+const VERSION = 'v25';
 $('#appVersion').textContent = `Breeze 노트 ${VERSION}`;
 $('#syncBtn').onclick = () => { $('#authMsg').textContent = ''; sync.ui(); $('#settings').showModal(); };
 $('#loginBtn').onclick = sync.login;
@@ -1430,6 +1766,11 @@ function paintFind(scroll = true) {
     CSS.highlights.set('find-current', new Highlight(...(findIdx >= 0 ? [findRanges[findIdx]] : [])));
   }
   $('#findCount').textContent = !findInput.value.trim() ? '' : findRanges.length ? `${findIdx + 1}/${findRanges.length}` : '없음';
+  const hiddenMatch = scroll && findIdx >= 0 && findRanges[findIdx].startContainer.parentElement?.closest('.sec-hidden');
+  if (hiddenMatch) {
+    revealNode(findRanges[findIdx].startContainer);
+    if (!hiddenMatch.classList.contains('sec-hidden')) return runFind({ keep: true }); // opened: measure again
+  }
   if (scroll && findIdx >= 0) {
     // bring the current match to the upper third of the note
     const r = findRanges[findIdx].getBoundingClientRect(), box = editor.getBoundingClientRect();
@@ -1451,6 +1792,7 @@ function openFind(q, { focus = true } = {}) {
 function closeFind({ toMatch = false } = {}) {
   const r = findRanges[findIdx];
   findBar.hidden = true;
+  $('#replaceRow').hidden = true;
   findRanges = [];
   findIdx = -1;
   CSS.highlights?.delete('find');
@@ -1470,6 +1812,19 @@ $('#findBtn').onclick = () => (findBar.hidden ? openFind() : closeFind());
 $('#findNext').onclick = () => stepFind(1);
 $('#findPrev').onclick = () => stepFind(-1);
 $('#findClose').onclick = () => closeFind({ toMatch: true });
+// 찾기 및 대치
+$('#replaceToggle').onclick = () => { const row = $('#replaceRow'); row.hidden = !row.hidden; if (!row.hidden) $('#replaceInput').focus(); };
+function replaceRanges(ranges) {
+  const text = $('#replaceInput').value;
+  for (const r of [...ranges].reverse()) { r.deleteContents(); r.insertNode(document.createTextNode(text)); }
+  editor.normalize();
+  changed();
+  runFind({ keep: true });
+  return ranges.length;
+}
+$('#replaceOne').onclick = () => { if (findIdx >= 0) replaceRanges([findRanges[findIdx]]); else toast('바꿀 내용이 없습니다'); };
+$('#replaceAll').onclick = () => { const n = findRanges.length; if (!n) return toast('바꿀 내용이 없습니다'); replaceRanges(findRanges); toast(`${n}개를 바꿨습니다`); };
+$('#replaceInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('#replaceOne').click(); } else if (e.key === 'Escape') closeFind({ toMatch: true }); });
 for (const b of [$('#findNext'), $('#findPrev')]) b.addEventListener('pointerdown', (e) => e.preventDefault()); // keep the keyboard up
 
 /* ---------------- boot ---------------- */
