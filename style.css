@@ -452,8 +452,8 @@ html.touch #editor h1::before, html.touch #editor h2::before, html.touch #editor
 /* ---------- folders (Apple Notes: 폴더 | 목록 | 노트) ---------- */
 #folders { display: none; min-width: 0; min-height: 0; flex-direction: column; background: color-mix(in srgb, var(--side), var(--fg) 3%);
   border-right: 1px solid var(--line); padding-top: env(safe-area-inset-top); padding-left: env(safe-area-inset-left); }
-#app.folders-open:not(.single):not(.focus):not(.solo) { grid-template-columns: 210px clamp(220px, 28vw, 330px) minmax(0, 1fr); }
-#app.folders-open:not(.single):not(.focus):not(.solo) #folders { display: flex; }
+#app.folders-open:not(.single):not(.focus):not(.solo):not(.drawer) { grid-template-columns: 210px clamp(220px, 28vw, 330px) minmax(0, 1fr); }
+#app.folders-open:not(.single):not(.focus):not(.solo):not(.drawer) #folders { display: flex; }
 #app.single.show-folders #folders { display: flex; }
 #app.single.show-folders #sidebar, #app.single.show-folders #editorPane { display: none !important; }
 .fold-head { display: flex; align-items: center; padding: 14px 18px 8px; min-height: 54px; }
@@ -570,3 +570,33 @@ html.touch #editor h1::before, html.touch #editor h2::before, html.touch #editor
 /* narrow list column: the sync button shrinks to its dot so the folder name fits */
 #sidebar { container-type: inline-size; }
 @container (max-width: 300px) { .sync-btn { font-size: 0; gap: 0; padding: 0 10px; } }
+
+/* ---------- unfolded Fold / tablets: iPad Notes layout ---------- */
+/* folders slide in from the left over list | note */
+#app.drawer #folders { display: flex; position: fixed; z-index: 35; top: 0; bottom: 0; left: 0; width: min(320px, 82vw);
+  transform: translateX(-105%); transition: transform .26s cubic-bezier(.2,.8,.2,1); box-shadow: 0 0 40px #0008; border-right: 1px solid var(--line); }
+#app.drawer.folders-open #folders { transform: none; }
+#app.drawer.focus #folders { display: flex !important; }
+#scrim { position: fixed; inset: 0; z-index: 34; background: #0005; }
+#scrim[hidden] { display: none; }
+#app.drawer .fold-head h1 { font-size: 26px; font-weight: 700; color: var(--fg); }
+/* finger-sized controls */
+#app.tablet .tgroup .icon-btn { min-width: 44px; height: 40px; border-radius: 20px; }
+#app.tablet .icon-btn { min-width: 44px; height: 44px; }
+#app.tablet .ed-head { padding-top: 8px; padding-bottom: 8px; }
+#app.tablet #list li .sw { padding: 12px 14px; }
+#app.tablet #list li .t { font-size: 16px; }
+#app.tablet #list li .p { font-size: 14px; }
+#app.tablet #folderList li.fl { padding: 11px 12px; }
+#app.tablet #folderList li.fl .nm { font-size: 16px; }
+#app.tablet .menu button { padding: 12px 14px; font-size: 16px; }
+#app.tablet #search { padding: 10px 14px; font-size: 16px; }
+#app.tablet .side-head h1 { font-size: 28px; }
+#app.tablet #editor { font-size: calc(17px * var(--zoom, 1)); }
+html.touch .menu button { min-height: 44px; }
+
+/* ---------- long-press / right-click note menu ---------- */
+.row-menu { min-width: 220px; }
+#list li.pressed .sw { background: var(--active); transform: scale(.985); transition: transform .15s; }
+/* tablet toolbar like the iPad: pin and delete live in the ⋯ menu (and the long-press menu) */
+#app.tablet .ed-head .tools > .tgroup:not(.fmt) { display: none; }

@@ -297,6 +297,7 @@ folderList.addEventListener('click', (e) => {
   const li = e.target.closest('li[data-scope]');
   if (!li) return;
   const sc = JSON.parse(li.dataset.scope);
+  if (app.classList.contains('drawer')) setDrawer(false);
   if (sameScope(sc, scope) && !single()) return;
   setScope(sc);
 });
@@ -460,6 +461,7 @@ function hideFolders() {
 }
 $('#foldersBtn').onclick = () => {
   if (single()) return showFolders();
+  if (app.classList.contains('drawer')) return setDrawer(!app.classList.contains('folders-open'));
   foldersOpen = !app.classList.contains('folders-open');
   app.classList.toggle('folders-open', foldersOpen);
   try { localStorage.setItem('breeze.folders', foldersOpen ? '1' : '0'); } catch {}
@@ -734,7 +736,7 @@ list.addEventListener('pointerdown', (e) => {
   if (!li) return;
   if (!trashMode && !selecting) {
     clearTimeout(pressT);
-    pressT = setTimeout(() => { if (sw?.active) return; sw = null; eatClick = true; enterSelect(li.dataset.id); }, 480);
+    pressT = setTimeout(() => { if (sw?.active) return; sw = null; eatClick = true; openRowMenu(li); }, 480);
   }
   const inner = li.querySelector('.sw');
   if (inner && !selecting) sw = { li, inner, x: e.clientX, y: e.clientY, dx: 0, active: false, armed: false, id: e.pointerId };
@@ -801,7 +803,57 @@ list.addEventListener('contextmenu', (e) => {
   const li = e.target.closest('li[data-id]');
   if (!li || trashMode) return;
   e.preventDefault(); // no browser menu on long press; right-click on a Mac also starts selecting
-  if (!touchUI && !selecting) enterSelect(li.dataset.id);
+  if (!touchUI && !selecting) openRowMenu(li, e);
+});
+
+/* ---------------- long-press menu (iPhone / iPad Notes): 고정 · 잠그기 · 사본 보내기 · 이동 · 선택 · 삭제 ---------------- */
+const rowMenu = $('#rowMenu');
+let rowMenuFor = null;
+function openRowMenu(li, at) {
+  const n = index.get(li.dataset.id);
+  if (!n) return;
+  rowMenuFor = n;
+  navigator.vibrate?.(15);
+  rowMenu.querySelector('[data-rm=pin]').textContent = n.pinned ? '노트 고정 해제' : '노트 고정';
+  rowMenu.querySelector('[data-rm=lock]').textContent = isLocked(n) ? '잠금 제거' : '노트 잠그기';
+  rowMenu.querySelector('[data-rm=share]').disabled = isLocked(n) && plainFor(n) === null;
+  li.classList.add('pressed');
+  rowMenu.hidden = false;
+  const r = li.getBoundingClientRect(), m = rowMenu.getBoundingClientRect();
+  const x = at ? at.clientX : r.left + 16, y = at ? at.clientY : r.bottom;
+  rowMenu.style.left = `${Math.max(8, Math.min(innerWidth - m.width - 8, x))}px`;
+  rowMenu.style.top = `${y + m.height + 8 < innerHeight ? y + 4 : Math.max(8, (at ? y : r.top) - m.height - 4)}px`;
+}
+function closeRowMenu() {
+  rowMenu.hidden = true;
+  list.querySelector('li.pressed')?.classList.remove('pressed');
+}
+document.addEventListener('pointerdown', (e) => { if (!rowMenu.hidden && !e.target.closest('#rowMenu')) closeRowMenu(); });
+rowMenu.addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-rm]');
+  const n = rowMenuFor;
+  if (!b || !n) return;
+  closeRowMenu();
+  const k = b.dataset.rm;
+  if (k === 'pin') { n.pinned = !n.pinned; touch(n); if (n === current) syncPin(); renderList(); }
+  else if (k === 'lock') isLocked(n) ? removeLock(n) : lockNote(n);
+  else if (k === 'move') openMoveSheet([n]);
+  else if (k === 'select') enterSelect(n.id);
+  else if (k === 'share') {
+    const text = textOf(isLocked(n) ? { id: '_tmp', body: plainFor(n) } : n).trim();
+    try {
+      if (navigator.share) await navigator.share({ title: info(n).title, text });
+      else { await navigator.clipboard.writeText(text); toast('클립보드에 복사했습니다'); }
+    } catch {}
+  } else if (k === 'del') {
+    if (n === current) return removeNote(n);
+    n.deleted = true;
+    touch(n);
+    flush();
+    renderList();
+    undoStack.push(n);
+    toast('휴지통으로 옮겼습니다', '실행 취소', () => undoDelete(n));
+  }
 });
 
 /* ---------------- multi-select: 이동 · 공유 · 삭제 ---------------- */
@@ -1118,14 +1170,34 @@ if (window.visualViewport) {
 $('#emptyNew').onclick = newNote;
 $('#backBtn').onclick = () => (history.state?.note ? history.back() : showList());
 addEventListener('popstate', () => { // Android back button
-  if (app.classList.contains('show-folders')) app.classList.remove('show-folders');
+  if (app.classList.contains('drawer') && app.classList.contains('folders-open')) { app.classList.remove('folders-open'); $('#scrim').hidden = true; }
+  else if (app.classList.contains('show-folders')) app.classList.remove('show-folders');
   else if (selecting) exitSelect(true);
   else if (app.classList.contains('show-editor')) showList();
 });
+// Unfolded Fold / tablets: list | note side by side like the iPad; the folder list is a drawer over them
+// (wide enough tablets keep all three columns).
+const tablet = matchMedia('(pointer: coarse) and (min-width: 600px)');
+const drawerMode = () => tablet.matches && !mobile.matches && innerWidth < 1100;
 function applyLayout() {
   app.classList.toggle('phone', mobile.matches);
   app.classList.toggle('single', single());
+  app.classList.toggle('tablet', tablet.matches && !mobile.matches);
+  const wasDrawer = app.classList.contains('drawer');
+  app.classList.toggle('drawer', drawerMode() && !single());
+  if (app.classList.contains('drawer') && !wasDrawer) setDrawer(false);
 }
+function setDrawer(open) {
+  const was = app.classList.contains('folders-open');
+  app.classList.toggle('folders-open', open);
+  $('#scrim').hidden = !open;
+  if (open) renderFolders();
+  // Android back closes the drawer
+  if (open && !was) history.pushState({ drawer: 1 }, '');
+  else if (!open && was && history.state?.drawer) history.back();
+}
+$('#scrim').onclick = () => setDrawer(false);
+addEventListener('resize', () => applyLayout());
 applyLayout();
 mobile.addEventListener('change', () => {
   applyLayout();
@@ -1457,8 +1529,8 @@ const cmds = {
   file: () => fileInput.click(),
   clip: () => pasteFromClipboard(),
   // ↶ ↷ while typing on a phone or Fold, where there's no ⌘Z
-  undo: () => document.execCommand('undo'),
-  redo: () => document.execCommand('redo'),
+  undo: () => smartUndo('undo'),
+  redo: () => smartUndo('redo'),
   more: (btn) => openNoteMenu(btn),
 };
 for (const b of document.querySelectorAll('[data-cmd]')) {
@@ -1473,6 +1545,23 @@ for (const b of document.querySelectorAll('[data-cmd]')) {
 }
 
 
+/* ---------------- undo that only counts real text changes ---------------- */
+// Phone keyboards often "re-type" a tapped word with the very same letters, and some steps only move the caret.
+// The browser records those as undo steps, so ↶ seemed to undo clicks. Keep undoing until the text actually changes.
+const visibleHtml = () => editor.innerHTML.replace(/ class="(?:title|sec-hidden|has-hidden)"/g, '');
+function smartUndo(cmd) {
+  const before = visibleHtml();
+  for (let i = 0; i < 40 && document.queryCommandEnabled(cmd); i++) {
+    document.execCommand(cmd);
+    if (visibleHtml() !== before) break;
+  }
+}
+editor.addEventListener('keydown', (e) => {
+  if (!(e.metaKey || e.ctrlKey) || e.altKey || e.code !== 'KeyZ' || e.isComposing) return;
+  e.preventDefault();
+  smartUndo(e.shiftKey ? 'redo' : 'undo');
+});
+
 /* ---------------- ⋯ note menu: 이동 · 잠금 · Markdown · 인쇄 ---------------- */
 const noteMenu = $('#noteMenu');
 function openNoteMenu(btn) {
@@ -1482,6 +1571,8 @@ function openNoteMenu(btn) {
   noteMenu.querySelector('[data-nm=relock]').hidden = !lockKit.open();
   for (const k of ['move', 'md', 'print']) noteMenu.querySelector(`[data-nm=${k}]`).disabled = !!current.deleted || (k !== 'move' && lockedNow());
   noteMenu.querySelector('[data-nm=lock]').disabled = !!current.deleted;
+  noteMenu.querySelector('[data-nm=pin]').textContent = current.pinned ? '노트 고정 해제' : '노트 고정';
+  noteMenu.querySelector('[data-nm=pin]').disabled = noteMenu.querySelector('[data-nm=del]').disabled = !!current.deleted;
   noteMenu.hidden = false;
   const r = btn.getBoundingClientRect(), m = noteMenu.getBoundingClientRect();
   noteMenu.style.left = `${Math.max(8, Math.min(innerWidth - m.width - 8, r.right - m.width))}px`;
@@ -1493,7 +1584,9 @@ noteMenu.addEventListener('click', async (e) => {
   if (!b || !current) return;
   noteMenu.hidden = true;
   const k = b.dataset.nm;
-  if (k === 'move') openMoveSheet([current]);
+  if (k === 'pin') cmds.pin();
+  else if (k === 'del') removeNote(current);
+  else if (k === 'move') openMoveSheet([current]);
   else if (k === 'md') exportMarkdown(current);
   else if (k === 'print') printNote();
   else if (k === 'relock') { lockKit.forget(); toast('잠긴 노트를 다시 잠갔습니다'); }
@@ -2398,7 +2491,7 @@ const sync = (() => {
 })();
 
 /* ---------------- settings dialog ---------------- */
-const VERSION = 'v28';
+const VERSION = 'v29';
 $('#appVersion').textContent = `Breeze 노트 ${VERSION}`;
 $('#syncBtn').onclick = () => { $('#authMsg').textContent = ''; sync.ui(); $('#settings').showModal(); };
 $('#loginBtn').onclick = sync.login;

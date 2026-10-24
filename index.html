@@ -203,13 +203,27 @@
 </div>
 
 <div id="noteMenu" class="menu tag-menu" hidden>
+  <button data-nm="pin">노트 고정</button>
   <button data-nm="move">폴더로 이동…</button>
   <button data-nm="lock">노트 잠그기</button>
   <button data-nm="relock" hidden>잠긴 노트 모두 다시 잠그기</button>
   <hr>
   <button data-nm="md">Markdown으로 내보내기</button>
   <button data-nm="print">인쇄 / PDF로 저장…</button>
+  <hr>
+  <button data-nm="del" class="danger-text">삭제</button>
 </div>
+
+<div id="rowMenu" class="menu tag-menu row-menu" hidden>
+  <button data-rm="pin">노트 고정</button>
+  <button data-rm="lock">노트 잠그기</button>
+  <button data-rm="share">사본 보내기</button>
+  <button data-rm="move">이동</button>
+  <button data-rm="select">노트 선택</button>
+  <hr>
+  <button data-rm="del" class="danger-text">삭제</button>
+</div>
+<div id="scrim" hidden></div>
 
 <div id="folderMenu" class="menu tag-menu" hidden>
   <button data-fm="edit">스마트 폴더 편집…</button>
