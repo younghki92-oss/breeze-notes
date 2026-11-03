@@ -1131,8 +1131,20 @@ function leave(n) {
   }
   flush();
 }
+// Put the caret at the end of the last line, inside it. Collapsing on the editor itself leaves the caret
+// between lines (after the last <div>); plain letters get moved into the line, but a Korean syllable that
+// starts composing there is moved mid-composition and the keyboard commits its first letter (ㄷㅏ instead of 다).
 function caretEnd() {
-  const r = document.createRange(); r.selectNodeContents(editor); r.collapse(false);
+  let node = editor;
+  for (let last = node.lastChild; last; last = node.lastChild) {
+    if (last.nodeType === 3) { node = last; break; }
+    if (last.nodeType !== 1 || /^(BR|IMG|HR)$/.test(last.tagName) || last.getAttribute('contenteditable') === 'false') break;
+    node = last;
+  }
+  const r = document.createRange();
+  if (node.nodeType === 3) r.setStart(node, node.length);
+  else r.setStart(node, node.lastChild?.nodeName === 'BR' ? node.childNodes.length - 1 : node.childNodes.length); // before the placeholder <br>
+  r.collapse(true);
   const s = getSelection(); s.removeAllRanges(); s.addRange(r);
 }
 function newNote() {
@@ -2491,7 +2503,7 @@ const sync = (() => {
 })();
 
 /* ---------------- settings dialog ---------------- */
-const VERSION = 'v29';
+const VERSION = 'v30';
 $('#appVersion').textContent = `Breeze 노트 ${VERSION}`;
 $('#syncBtn').onclick = () => { $('#authMsg').textContent = ''; sync.ui(); $('#settings').showModal(); };
 $('#loginBtn').onclick = sync.login;
