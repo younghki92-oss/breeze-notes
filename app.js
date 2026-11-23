@@ -63,13 +63,13 @@ function addNote(n) { notes.push(n); index.set(n.id, n); }
 function dropNote(n) { notes.splice(notes.indexOf(n), 1); index.delete(n.id); unsaved.delete(n.id); }
 
 let saveT;
-function touch(n) {
+function touch(n, typing) {
   n.updatedAt = Math.max(Date.now(), n.updatedAt + 1);
   n.dirty = true;
-  unsaved.delete(n.id);
+  const fresh = unsaved.delete(n.id);
   clearTimeout(saveT);
   saveT = setTimeout(flush, 300);
-  renderListSoon();
+  renderListSoon(typing && !fresh ? n : null); // a brand-new note has to be drawn into the list once
 }
 // Other Breeze windows (a note opened by double-click) hear about every save, so both stay in step.
 const bc = 'BroadcastChannel' in window ? new BroadcastChannel('breeze-notes') : null;
@@ -96,6 +96,7 @@ bc?.addEventListener('message', ({ data }) => {
   if (changed) renderListSoon();
 });
 async function flush() {
+  if (editNote) saveEditorNow();
   clearTimeout(saveT);
   await persist(notes.filter((n) => n.dirty && !unsaved.has(n.id)));
   sync.schedule(1200);
@@ -476,6 +477,7 @@ function listed(all = visible()) {
 /* ---------------- list ---------------- */
 const PIN = '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" style="margin-right:4px;color:var(--accent)"><path d="M9 3h6l-1 6 3 3v2h-4v8h-2v-8H7v-2l3-3Z"/></svg>';
 function renderList() {
+  clearTimeout(listFullT);
   openRow = null;
   const q = search.value.trim();
   const all = visible();
@@ -653,6 +655,7 @@ tagMenu.addEventListener('click', (e) => {
 document.addEventListener('pointerdown', (e) => { if (!tagMenu.hidden && !e.target.closest('#tagMenu')) tagMenu.hidden = true; });
 // rename (nw) or remove (nw = null) a tag in every note's text
 function retag(old, nw) {
+  if (editNote) saveEditorNow();
   const escRe = old.replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&');
   const re = new RegExp(`(^|[\\s(>]|&nbsp;)#${escRe}(?![\\p{L}\\p{N}_\\-/])`, 'gu');
   let k = 0;
@@ -695,9 +698,26 @@ list.addEventListener('dragstart', (e) => {
   e.dataTransfer.effectAllowed = 'copy';
 });
 let listRaf = 0;
-function renderListSoon() {
+let listFullT = 0;
+function renderListSoon(typed) {
   if (single() && app.classList.contains('show-editor')) return; // list is off-screen; showList() re-renders it
+  if (typed) { // typing: just this note's row now, the full list (order, groups, counts) when typing pauses
+    patchRow(typed);
+    clearTimeout(listFullT);
+    listFullT = setTimeout(renderList, 1500);
+    return;
+  }
+  clearTimeout(listFullT);
   if (!listRaf) listRaf = requestAnimationFrame(() => { listRaf = 0; renderList(); });
+}
+function patchRow(n) {
+  const li = list.querySelector(`li[data-id="${n.id}"]`);
+  if (!li) return;
+  const { title, preview } = info(n);
+  const t = li.querySelector('.t'), p = li.querySelector('.p'), d = li.querySelector('.d');
+  if (t) t.innerHTML = (n.pinned && !trashMode ? PIN : '') + esc(title);
+  if (p) p.innerHTML = `<time>${fmt(sortDate(n))}</time>${esc(preview)}`;
+  if (d) d.textContent = fmt(sortDate(n));
 }
 
 list.addEventListener('dblclick', (e) => {
@@ -938,6 +958,7 @@ function openMoveSheet(ns) {
 }
 // add a tag line to notes that don't have the tag yet; returns how many changed
 function addTag(ns, t) {
+  if (editNote) saveEditorNow();
   let k = 0;
   for (const n of ns) {
     if (n.deleted || isLocked(n) || tagsOf(n).includes(t)) continue;
@@ -1124,6 +1145,7 @@ function showList() {
 }
 // Empty notes vanish when you leave them, like Apple Notes.
 function leave(n) {
+  if (editNote === n) saveEditorNow();
   if (n.deleted) return;
   if (!hasContent(n)) {
     if (unsaved.has(n.id)) dropNote(n);
@@ -1279,9 +1301,22 @@ editor.addEventListener('input', (e) => {
   tidyEditor();
   saveEditor();
 });
+// Called on every keystroke, so it only schedules the real save: turning the whole note into HTML and
+// updating the list on each letter made typing stutter on long notes and on phones.
+// Anything that reads the note's body first calls saveEditorNow() (flush, leave, tags, lock, export).
+let editT = 0, editNote = null;
 function saveEditor() {
-  if (lockedNow()) return;
+  if (!current || lockedNow()) return;
+  editNote = current;
   current.editedAt = Date.now();
+  clearTimeout(editT);
+  editT = setTimeout(saveEditorNow, 200);
+}
+function saveEditorNow() {
+  clearTimeout(editT);
+  const n = editNote;
+  editNote = null;
+  if (!n || n !== current || lockedNow()) return;
   const html = editor.innerHTML
     .replace(/<img\b[^>]*?data-img="([^"]+)"[^>]*>/g, '<img data-img="$1">')
     .replace(/ class="([^"]*)"/g, (_m, c) => { // the title mark is display-only
@@ -1289,7 +1324,7 @@ function saveEditor() {
       return keep.length ? ` class="${keep.join(' ')}"` : '';
     });
   if (isLocked(current)) sealSoon(current, html);
-  else { current.body = html; touch(current); }
+  else if (html !== current.body) { current.body = html; touch(current, true); }
   highlightSoon();
   if (!findBar.hidden) runFind({ keep: true, scroll: false }); // matches follow the text while typing
 }
@@ -1710,7 +1745,7 @@ async function askPassword(mode) { // mode: 'create' | 'unlock' → resolves tru
 }
 async function lockNote(n) {
   if (!lockKit.open() && !(await askPassword(settings.lock ? 'unlock' : 'create'))) return;
-  if (n === current) saveEditor();
+  if (n === current) saveEditorNow();
   const plain = n.body;
   const body = lockedBody(info(n).title, await lockKit.seal(plain));
   n.body = body;
@@ -1818,7 +1853,7 @@ function download(name, text, type) {
 }
 const safeName = (s) => (s.replace(/[\\/:*?"<>|\n\r]+/g, ' ').trim().slice(0, 80) || '노트');
 function exportMarkdown(n) {
-  if (n === current) saveEditor();
+  if (n === current) saveEditorNow();
   const html = isLocked(n) ? plainFor(n) : n.body;
   if (html == null) return;
   download(`${safeName(info({ id: '_tmp', body: html }).title)}.md`, htmlToMarkdown(html), 'text/markdown;charset=utf-8');
@@ -2503,7 +2538,7 @@ const sync = (() => {
 })();
 
 /* ---------------- settings dialog ---------------- */
-const VERSION = 'v30';
+const VERSION = 'v31';
 $('#appVersion').textContent = `Breeze 노트 ${VERSION}`;
 $('#syncBtn').onclick = () => { $('#authMsg').textContent = ''; sync.ui(); $('#settings').showModal(); };
 $('#loginBtn').onclick = sync.login;
@@ -2813,3 +2848,4 @@ for (const b of [$('#findNext'), $('#findPrev')]) b.addEventListener('pointerdow
   }
 })();
 addEventListener('pagehide', flush);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); });
